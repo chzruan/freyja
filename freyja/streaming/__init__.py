@@ -1,0 +1,1 @@
+from .streaming_model_wrapper import streaming_model
