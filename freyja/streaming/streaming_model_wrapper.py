@@ -126,7 +126,7 @@ class streaming_model:
         self.xiR_func = InterpolatedUnivariateSpline(
             r_xiR,
             xiR,
-            ext=0,
+            ext='zeros',
         )
 
         r = r_velmom
