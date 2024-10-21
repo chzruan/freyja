@@ -122,24 +122,28 @@ class streaming_model:
         c04 *= kms_to_Mpch**4
         c22 *= kms_to_Mpch**4
 
-
         self.xiR_func = InterpolatedUnivariateSpline(
             r_xiR,
             xiR,
-            ext='zeros',
+            ext=0,
         )
+
+        def _tologr(inputfunc):
+            def _asahi(rr):
+                return inputfunc(np.log10(rr))
+            return _asahi
 
         r = r_velmom
         if (self.model == 'gsm'):
             self.vlos_pdf_func = moments2gaussian(
                 m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-                c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
+                c_20=InterpolatedUnivariateSpline(np.log10(r), np.log10(m10), ext=1),
                 c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
             )
         elif (self.model == 'stsm_cc'):
             self.vlos_pdf_func = moments2skewt_cc(
                 m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-                c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
+                c_20=InterpolatedUnivariateSpline(np.log10(r), np.log10(m10), ext=1),
                 c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
                 c_12=InterpolatedUnivariateSpline(r, c12, ext=1),
                 c_30=InterpolatedUnivariateSpline(r, c30, ext=1),
@@ -180,296 +184,4 @@ class streaming_model:
             xiS4 = tpcf_multipole(xiS_s_mu, mu_output_binedge, order=4)
             return s_output_bincentre, xiS0, xiS2, xiS4
         return xiS_s_mu
-
-#         if (self.model == 'gsm'):
-#             return streaming_model_Gaussian(
-#                 r_velmom=r_velmom, 
-#                 m10=m10,
-#                 c20=c20, c02=c02,
-#                 # c12=c12, c30=c30,
-#                 # c40=c40, c04=c04, c22=c22,
-#                 r_xiR=r_xiR, xiR=xiR,
-#                 s_output_binedge=s_output_binedge,
-#                 mu_output_bincentre=mu_output_bincentre,
-#                 # sigma_vir_M1=sigma_vir_M1,
-#                 # sigma_vir_M2=sigma_vir_M2,
-#                 kms_to_Mpch=kms_to_Mpch,
-#                 return_multipoles=return_multipoles,
-#                 # alpha_c=alpha_c,
-#             )
-#         if (self.model == 'stsm_cc'):
-#             return streaming_model_Gaussian(
-#                 r_velmom=r_velmom, 
-#                 m10=m10,
-#                 c20=c20, c02=c02,
-#                 c12=c12, c30=c30,
-#                 c40=c40, c04=c04, c22=c22,
-#                 r_xiR=r_xiR, xiR=xiR,
-#                 s_output_binedge=s_output_binedge,
-#                 mu_output_bincentre=mu_output_bincentre,
-#                 sigma_vir_M1=sigma_vir_M1,
-#                 sigma_vir_M2=sigma_vir_M2,
-#                 kms_to_Mpch=kms_to_Mpch,
-#                 return_multipoles=return_multipoles,
-#                 alpha_c=alpha_c,
-#             )
-
-#         return streaming_model_skewt(
-#             r_velmom=r_velmom, 
-#             m10=m10,
-#             c20=c20, c02=c02,
-#             c12=c12, c30=c30,
-#             c40=c40, c04=c04, c22=c22,
-#             r_xiR=r_xiR, xiR=xiR,
-#             s_output_binedge=s_output_binedge,
-#             mu_output_bincentre=mu_output_bincentre,
-#             # sigma_vir_M1=sigma_vir_M1,
-#             # sigma_vir_M2=sigma_vir_M2,
-#             kms_to_Mpch=kms_to_Mpch,
-#             return_multipoles=return_multipoles,
-#             # alpha_c=alpha_c,
-#         )
-
-#     def streaming_model_Gaussian(
-#         self,
-#         r_velmom, 
-#         m10,
-#         c20, c02,
-#         r_xiR, xiR,
-#         s_output_binedge,
-#         mu_output_binedge,
-#         kms_to_Mpch=1.0,
-#         return_multipoles=True,
-#     ):
-#         s_output_bincentre = 0.5 * (s_output_binedge[1:] + s_output_binedge[:-1])
-#         mu_output_bincentre = 0.5 * (mu_output_binedge[1:] + mu_output_binedge[:-1])
-
-#         m10 *= kms_to_Mpch
-
-#         c20 *= kms_to_Mpch**2
-#         c02 *= kms_to_Mpch**2
-
-#         # c12 *= kms_to_Mpch**3
-#         # c30 *= kms_to_Mpch**3
-
-#         # c40 *= kms_to_Mpch**4
-#         # c04 *= kms_to_Mpch**4
-#         # c22 *= kms_to_Mpch**4
-
-#         r = r_velmom
-#         self.vlos_pdf_func = moments2gaussian(
-#             m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-#             c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
-#             c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
-#         )
-#         self.xiR_func = InterpolatedUnivariateSpline(
-#             r_xiR,
-#             xiR,
-#             ext=0,
-#         )
-#         xiS_s_mu = real2redshift.simps_integrate(
-#             s_c=s_output_bincentre, 
-#             mu_c=mu_output_bincentre, 
-#             twopcf_function=self.xiR_func,
-#             los_pdf_function=self.vlos_pdf_func,
-#             limit = 120.0,
-#             epsilon = 0.01,
-#             n = 300,
-#         )
-
-#         if return_multipoles:
-
-#         return xiS_s_mu
-
-
-#     def streaming_model_Gaussian(
-#         self,
-#         r_velmom, 
-#         m10,
-#         c20, c02,
-#         r_xiR, xiR,
-#         s_output_binedge,
-#         mu_output_binedge,
-#         kms_to_Mpch=1.0,
-#         return_multipoles=True,
-#     ):
-#         s_output_bincentre = 0.5 * (s_output_binedge[1:] + s_output_binedge[:-1])
-#         mu_output_bincentre = 0.5 * (mu_output_binedge[1:] + mu_output_binedge[:-1])
-
-#         m10 *= kms_to_Mpch
-
-#         c20 *= kms_to_Mpch**2
-#         c02 *= kms_to_Mpch**2
-
-#         # c12 *= kms_to_Mpch**3
-#         # c30 *= kms_to_Mpch**3
-
-#         # c40 *= kms_to_Mpch**4
-#         # c04 *= kms_to_Mpch**4
-#         # c22 *= kms_to_Mpch**4
-
-#         r = r_velmom
-#         self.vlos_pdf_func = moments2gaussian(
-#             m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-#             c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
-#             c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
-#         )
-#         self.xiR_func = InterpolatedUnivariateSpline(
-#             r_xiR,
-#             xiR,
-#             ext=0,
-#         )
-#         xiS_s_mu = real2redshift.simps_integrate(
-#             s_c=s_output_bincentre, 
-#             mu_c=mu_output_bincentre, 
-#             twopcf_function=self.xiR_func,
-#             los_pdf_function=self.vlos_pdf_func,
-#             limit = 120.0,
-#             epsilon = 0.01,
-#             n = 300,
-#         )
-
-#         if return_multipoles:
-
-#         return xiS_s_mu
-
-# class streaming_model_skewt:
-#     def __init__(self):
-#         pass
-
-#     def __call__(
-#         self,
-#         r_velmom, 
-#         m10,
-#         c20, c02,
-#         c12, c30,
-#         c40, c04, c22,
-#         r_xiR, xiR,
-#         s_output_binedge,
-#         mu_output_bincentre,
-#         kms_to_Mpch=1.0,
-#         return_multipoles=False,
-#     ):
-#         s_output_bincentre = 0.5 * (s_output_binedge[1:] + s_output_binedge[:-1])
-#         mu_output_bincentre = 0.5 * (mu_output_binedge[1:] + mu_output_binedge[:-1])
-
-#         m10 *= kms_to_Mpch
-
-#         c20 *= kms_to_Mpch**2
-#         c02 *= kms_to_Mpch**2
-
-#         c12 *= kms_to_Mpch**3
-#         c30 *= kms_to_Mpch**3
-
-#         c40 *= kms_to_Mpch**4
-#         c04 *= kms_to_Mpch**4
-#         c22 *= kms_to_Mpch**4
-
-#         r = r_velmom
-#         vlos_pdf_skewt = moments2skewt(
-#             m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-#             c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
-#             c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
-#             c_12=InterpolatedUnivariateSpline(r, c12, ext=1),
-#             c_30=InterpolatedUnivariateSpline(r, c30, ext=1),
-#             c_22=InterpolatedUnivariateSpline(r, c22, ext=1),
-#             c_40=InterpolatedUnivariateSpline(r, c40, ext=1),
-#             c_04=InterpolatedUnivariateSpline(r, c04, ext=1)
-#         )
-
-#         xiR_func = InterpolatedUnivariateSpline(
-#             r_xiR,
-#             xiR,
-#             ext=0,
-#         )
-#         xiS_s_mu = real2redshift.simps_integrate(
-#             s_c=s_output_bincentre, 
-#             mu_c=mu_output_bincentre, 
-#             twopcf_function=xiR_func,
-#             los_pdf_function=vlos_pdf_skewt,
-#             limit = 120.0,
-#             epsilon = 0.01,
-#             n = 300,
-#         )
-
-#         return xiS_s_mu
-
-
-
-
-# class streaming_model_cc:
-#     def __init__(self):
-#         pass
-
-#     def __call__(
-#         self,
-#         r_velmom, 
-#         m10,
-#         c20, c02,
-#         c12, c30,
-#         c40, c04, c22,
-#         r_xiR, xiR,
-#         sigma_vir_M1,
-#         sigma_vir_M2,
-#         s_output_binedge,
-#         mu_output_bincentre,
-#         kms_to_Mpch=1.0,
-#         alpha_c=0.0,
-#     ):
-#         r'''
-#         r_velmom in the unit of Mpc/h
-#         velocity moments (m10, c20, ... c22) in the unit of km/s
-#         '''
-#         s_output_bincentre = 0.5 * (s_output_binedge[1:] + s_output_binedge[:-1])
-#         mu_output_bincentre = 0.5 * (mu_output_binedge[1:] + mu_output_binedge[:-1])
-
-#         m10 *= kms_to_Mpch
-
-#         c20 *= kms_to_Mpch**2
-#         c02 *= kms_to_Mpch**2
-
-#         c12 *= kms_to_Mpch**3
-#         c30 *= kms_to_Mpch**3
-
-#         c40 *= kms_to_Mpch**4
-#         c04 *= kms_to_Mpch**4
-#         c22 *= kms_to_Mpch**4
-
-#         sigma_vir_M1 *= kms_to_Mpch
-#         sigma_vir_M2 *= kms_to_Mpch
-
-#         r = r_velmom
-#         vlos_pdf_cc_func = moments2skewt_cc(
-#             m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-#             c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
-#             c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
-#             c_12=InterpolatedUnivariateSpline(r, c12, ext=1),
-#             c_30=InterpolatedUnivariateSpline(r, c30, ext=1),
-#             c_22=InterpolatedUnivariateSpline(r, c22, ext=1),
-#             c_40=InterpolatedUnivariateSpline(r, c40, ext=1),
-#             c_04=InterpolatedUnivariateSpline(r, c04, ext=1),
-#             alpha_c=alpha_c,
-#             sigma_vir_M1=sigma_vir_M1,
-#             sigma_vir_M2=sigma_vir_M2,
-#         )
-#         xiR_func = InterpolatedUnivariateSpline(
-#             r_xiR,
-#             xiR,
-#             ext=0,
-#         )
-#         xiS_s_mu = real2redshift.simps_integrate(
-#             s_c=s_output_bincentre, 
-#             mu_c=mu_output_bincentre, 
-#             twopcf_function=xiR_func,
-#             los_pdf_function=vlos_pdf_cc_func,
-#             limit = 120.0,
-#             epsilon = 0.01,
-#             n = 300,
-#         )
-
-#         return xiS_s_mu
-
-
-
-
 
