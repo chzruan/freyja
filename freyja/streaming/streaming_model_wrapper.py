@@ -137,13 +137,13 @@ class streaming_model:
         if (self.model == 'gsm'):
             self.vlos_pdf_func = moments2gaussian(
                 m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-                c_20=InterpolatedUnivariateSpline(np.log10(r), np.log10(m10), ext=1),
+                c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
                 c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
             )
         elif (self.model == 'stsm_cc'):
             self.vlos_pdf_func = moments2skewt_cc(
                 m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-                c_20=InterpolatedUnivariateSpline(np.log10(r), np.log10(m10), ext=1),
+                c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
                 c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
                 c_12=InterpolatedUnivariateSpline(r, c12, ext=1),
                 c_30=InterpolatedUnivariateSpline(r, c30, ext=1),
