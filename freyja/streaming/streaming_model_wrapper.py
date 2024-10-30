@@ -90,7 +90,7 @@ def tpcf_multipole(s_mu_tcpf_result, mu_bins, order=0):
 
 class streaming_model:
     def __init__(self, model):
-        self.model = model # ['gsm', 'stsm', 'stsm_cc',]
+        self.model = model # ['gsm', 'stsm',]
 
     def __call__(
         self,
@@ -128,31 +128,12 @@ class streaming_model:
             ext=0,
         )
 
-        def _tologr(inputfunc):
-            def _asahi(rr):
-                return inputfunc(np.log10(rr))
-            return _asahi
-
         r = r_velmom
         if (self.model == 'gsm'):
             self.vlos_pdf_func = moments2gaussian(
                 m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
                 c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
                 c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
-            )
-        elif (self.model == 'stsm_cc'):
-            self.vlos_pdf_func = moments2skewt_cc(
-                m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-                c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
-                c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
-                c_12=InterpolatedUnivariateSpline(r, c12, ext=1),
-                c_30=InterpolatedUnivariateSpline(r, c30, ext=1),
-                c_22=InterpolatedUnivariateSpline(r, c22, ext=1),
-                c_40=InterpolatedUnivariateSpline(r, c40, ext=1),
-                c_04=InterpolatedUnivariateSpline(r, c04, ext=1),
-                alpha_c=alpha_c,
-                sigma_vir_M1=sigma_vir_M1,
-                sigma_vir_M2=sigma_vir_M2,
             )
         elif (self.model == 'stsm'):
             self.vlos_pdf_func = moments2skewt(
