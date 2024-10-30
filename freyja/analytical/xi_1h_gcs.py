@@ -3,9 +3,11 @@ import sys
 
 from scipy.integrate import simps
 from scipy.interpolate import InterpolatedUnivariateSpline as ius
-from scipy import signal
+from scipy import stats, signal
+from scipy.special import legendre
 
 from astropy.cosmology import FlatLambdaCDM, Planck15
+from halotools.empirical_models import halo_mass_to_virial_velocity
 
 from hmd import Occupation, HaloModel
 from hmd.occupation import Zheng07Centrals, Zheng07Sats
@@ -16,13 +18,111 @@ from jax_fht.cosmology import FFTLog
 
 
 
-class xiR_1h_analy:
+def tpcf_multipole(s_mu_tcpf_result, mu_bins, order=0):
+    r"""
+    copied from from halotools.mock_observables.tpcf_multipole
+    https://halotools.readthedocs.io/en/latest/_modules/halotools/mock_observables/two_point_clustering/tpcf_multipole.html#tpcf_multipole
+
+    Calculate the multipoles of the two point correlation function
+    after first computing `~halotools.mock_observables.s_mu_tpcf`.
+
+    Parameters
+    ----------
+    s_mu_tcpf_result : np.ndarray
+        2-D array with the two point correlation function calculated in bins
+        of :math:`s` and :math:`\mu`.  See `~halotools.mock_observables.s_mu_tpcf`.
+
+    mu_bins : array_like
+        array of :math:`\mu = \cos(\theta_{\rm LOS})`
+        bins for which ``s_mu_tcpf_result`` has been calculated.
+        Must be between [0,1].
+
+    order : int, optional
+        order of the multpole returned.
+
+    Returns
+    -------
+    xi_l : np.array
+        multipole of ``s_mu_tcpf_result`` of the indicated order.
+
+    Examples
+    --------
+    For demonstration purposes we create a randomly distributed set of points within a
+    periodic cube of length 250 Mpc/h.
+
+    >>> Npts = 100
+    >>> Lbox = 250.
+
+    >>> x = np.random.uniform(0, Lbox, Npts)
+    >>> y = np.random.uniform(0, Lbox, Npts)
+    >>> z = np.random.uniform(0, Lbox, Npts)
+
+    We transform our *x, y, z* points into the array shape used by the pair-counter by
+    taking the transpose of the result of `numpy.vstack`. This boilerplate transformation
+    is used throughout the `~halotools.mock_observables` sub-package:
+
+    >>> sample1 = np.vstack((x,y,z)).T
+
+    First, we calculate the correlation function using
+    `~halotools.mock_observables.s_mu_tpcf`.
+
+    >>> from halotools.mock_observables import s_mu_tpcf
+    >>> s_bins  = np.linspace(0.01, 25, 10)
+    >>> mu_bins = np.linspace(0, 1, 15)
+    >>> xi_s_mu = s_mu_tpcf(sample1, s_bins, mu_bins, period=Lbox)
+
+    Then, we can calculate the quadrapole of the correlation function:
+
+    >>> xi_2 = tpcf_multipole(xi_s_mu, mu_bins, order=2)
+    """
+
+    # process inputs
+    s_mu_tcpf_result = np.atleast_1d(s_mu_tcpf_result)
+    mu_bins = np.atleast_1d(mu_bins)
+    order = int(order)
+
+    # calculate the center of each mu bin
+    mu_bin_centers = (mu_bins[:-1]+mu_bins[1:])/(2.0)
+
+    # get the Legendre polynomial of the desired order.
+    Ln = legendre(order)
+
+    # numerically integrate over mu
+    result = (2.0*order + 1.0)/2.0 * np.sum(s_mu_tcpf_result * np.diff(mu_bins) *\
+        (Ln(mu_bin_centers) + Ln(-1.0*mu_bin_centers)), axis=1)
+
+    return result
+
+
+def pdf_vlos_1h_cs_func(vlos, sigma_vir, alpha_c=0.0, alpha_s=1.0,):
+    vlos = vlos[..., np.newaxis]
+
+    stddev = np.sqrt(alpha_c**2 + alpha_s**2) * sigma_vir
+    return stats.norm.pdf(
+        vlos,
+        loc=0.0,
+        scale=stddev,
+    )
+
+
+def pdf_vlos_1h_ss_func(vlos, sigma_vir, alpha_s=1.0,):
+    vlos = vlos[..., np.newaxis]
+
+    stddev = np.sqrt(2) * alpha_s * sigma_vir
+    return stats.norm.pdf(
+        vlos,
+        loc=0.0,
+        scale=stddev,
+    )
+
+
+
+class xi_1h_analy:
     def __init__(
         self, 
         log10M_bincentre: np.array,
         dlog10M: np.array,
         dndlog10M: np.array,
-        # cHMF: np.array,
         redshift: float = 0.25,
         cosmology=FlatLambdaCDM(H0=70, Om0=0.3,),
         central_occupation: Occupation = Zheng07Centrals(),
@@ -46,11 +146,13 @@ class xiR_1h_analy:
             cosmology=FlatLambdaCDM(H0=70, Om0=0.3,),
             mdef="200m",
         ),
+        mdef="vir",
         fft_num: int = 1,
         fft_logrmin: float = -5.0,
         fft_logrmax: float = 3.0,
-        sigma_vir_halo = None,
-        cen_vel_bias = False,
+        sigma_vir_halo=None,
+        conc=None,
+        cen_vel_bias=False,
         verbose=False,
     ):
         self.redshift = redshift
@@ -69,7 +171,8 @@ class xiR_1h_analy:
         self.galaxy = HOD_params
         self.sat_profile = sat_profile
         self.cen_vel_bias = cen_vel_bias
-
+        self.mdef = mdef
+        self.conc = conc
 
         # halo occupation number N
         self.N_cen = self.central_occupation.get_n(
@@ -96,12 +199,6 @@ class xiR_1h_analy:
         self.n_s = self.n_sat
         self.f_c = self.n_c / self.n_g
         self.f_s = self.n_s / self.n_g
-        if verbose:
-            print(f'basic information of the current HOD setting:')
-            print(f'log10(n_gal) = {np.log10(self.n_g):.4f}')
-            print(f'log10(n_cen) = {np.log10(self.n_c):.4f}')
-            print(f'log10(n_sat) = {np.log10(self.n_s):.4f}')
-            print(f'satellite fraction n_sat / n_gal = {self.f_s:.4f}\n')
 
         self.fft = FFTLog(
             fft_num, 
@@ -110,7 +207,25 @@ class xiR_1h_analy:
             kr=1.0,
         )
 
-        self.sigma_vir_halo = sigma_vir_halo
+        if sigma_vir_halo is not None:
+            self.sigma_vir_halo = sigma_vir_halo
+        else:
+            self.sigma_vir_halo = (
+                halo_mass_to_virial_velocity(
+                    10**self.log10M_bincentre, 
+                    cosmology=self.cosmology, 
+                    redshift=self.redshift, 
+                    mdef=self.mdef,
+                ) / (np.sqrt(2) * np.sqrt(1 + redshift))
+            ) / np.sqrt(3) * self.kms_to_Mpch
+
+        if verbose:
+            print(f'basic information of the current HOD setting:')
+            print(f'log10(n_gal) = {np.log10(self.n_g):.4f}')
+            print(f'log10(n_cen) = {np.log10(self.n_c):.4f}')
+            print(f'log10(n_sat) = {np.log10(self.n_s):.4f}')
+            print(f'satellite fraction n_sat / n_gal = {self.f_s:.4f}\n')
+
 
 
     def get_xiR_1h_cs(
@@ -148,6 +263,7 @@ class xiR_1h_analy:
             mass=10**self.log10M_bincentre,
             cosmology=self.cosmology,
             redshift=self.redshift,
+            conc=self.conc,
         )
 
         xiR_1h_ss_forinterp = simps(
@@ -168,20 +284,19 @@ class xiR_1h_analy:
 
 
 
-
     def get_xiS_1h_cs(
         self,
         s_binedge,
-        mu_binedge=np.linspace(0, 1, 256),
-        return_multipoles=False,
-        eps=1e-4,
-        nps=int(200),
-        r_parallel_max=20.0, # for 1-halo terms, don't need large values
+        mu_binedge,
+        eps=1e-8,
+        nps=int(1000),
+        r_parallel_max=50.0, # don't need large
+        return_multipoles=True,
     ):
-        # shape: (len(r_perp), len(r_parallel), len(M))
-
         s_bincentre = 0.5 * (s_binedge[1:] + s_binedge[:-1])
         mu_bincentre = 0.5 * (mu_binedge[1:] + mu_binedge[:-1])
+
+        # shape: (len(r_perp), len(r_parallel), len(M))
 
         ss = s_bincentre.reshape(-1, 1)
         mu = mu_bincentre.reshape(1, -1)
@@ -192,7 +307,9 @@ class xiR_1h_analy:
         r_perp = s_perp 
         
 
-        r_parallel_integrand = np.linspace(-r_parallel_max, -eps, nps)
+        # r_parallel_integrand = np.linspace(-r_parallel_max, -eps, nps)
+        r_parallel_integrand = np.geomspace(eps, r_parallel_max, nps)
+        r_parallel_integrand = -1.0 * r_parallel_integrand[::-1]
 
         rr = np.sqrt(r_perp**2 + r_parallel_integrand**2)
         u_sat_r_M = self.sat_profile.u_r_M_profile(
@@ -205,12 +322,12 @@ class xiR_1h_analy:
         pdf_vlos = pdf_vlos_1h_cs_func(
             vlos, 
             self.sigma_vir_halo, 
-            alpha_c=self.galaxy.v_bias_centrals,
-            alpha_s=self.galaxy.v_bias_satellites,
+            alpha_c=self.HOD_params.v_bias_centrals,
+            alpha_s=self.HOD_params.v_bias_satellites,
         )
         xiS_smu_left = simps(
             simps(
-                u_sat_r_M * pdf_vlos,
+                (0.0 + u_sat_r_M) * pdf_vlos,
                 r_parallel_integrand,
                 axis=1,
             ) * self.dndlog10M * self.N_sat,
@@ -219,7 +336,8 @@ class xiR_1h_analy:
         ).reshape((s_bincentre.shape[0], mu_bincentre.shape[0])) / (self.n_cen * self.n_sat)
 
 
-        r_parallel_integrand = np.linspace(eps, r_parallel_max, nps)
+        r_parallel_integrand = np.geomspace(eps, r_parallel_max, nps)
+        # r_parallel_integrand = np.linspace(eps, r_parallel_max, nps)
 
         rr = np.sqrt(r_perp**2 + r_parallel_integrand**2)
         u_sat_r_M = self.sat_profile.u_r_M_profile(
@@ -232,12 +350,12 @@ class xiR_1h_analy:
         pdf_vlos = pdf_vlos_1h_cs_func(
             vlos, 
             self.sigma_vir_halo, 
-            alpha_c=self.galaxy.v_bias_centrals,
-            alpha_s=self.galaxy.v_bias_centrals,
+            alpha_c=self.HOD_params.v_bias_centrals,
+            alpha_s=self.HOD_params.v_bias_satellites,
         )
         xiS_smu_right = simps(
             simps(
-                u_sat_r_M * pdf_vlos,
+                (0.0 + u_sat_r_M) * pdf_vlos,
                 r_parallel_integrand,
                 axis=1,
             ) * self.dndlog10M * self.N_sat,
@@ -245,13 +363,131 @@ class xiR_1h_analy:
             axis=-1,
         ).reshape((s_bincentre.shape[0], mu_bincentre.shape[0])) / (self.n_cen * self.n_sat)
 
-        self.xiS_1h_cs = np.nan_to_num(xiS_smu_right + xiS_smu_left)
+        self.xiS_1h_cs = xiS_smu_right + xiS_smu_left
 
         if return_multipoles:
             xiS0 = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=0)
             xiS2 = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=2)
             xiS4 = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=4)
             return s_bincentre, xiS0, xiS2, xiS4
+
         return self.xiS_1h_cs
 
+
+
+    def get_xiS_1h_ss(
+        self,
+        s_binedge,
+        mu_binedge,
+        eps=1e-8,
+        nps=int(1000),
+        r_parallel_max=80.0, # don't need large
+        return_multipoles=True,
+    ):
+        s_bincentre = 0.5 * (s_binedge[1:] + s_binedge[:-1])
+        mu_bincentre = 0.5 * (mu_binedge[1:] + mu_binedge[:-1])
+
+        # shape: (len(r_perp), len(r_parallel), len(M))
+        ss = s_bincentre.reshape(-1, 1)
+        mu = mu_bincentre.reshape(1, -1)
+        s_parallel = ss * mu 
+        s_perp = ss * np.sqrt(1.0 - mu**2)
+        s_parallel = s_parallel.reshape(-1, 1)
+        s_perp = s_perp.reshape(-1, 1)
+        r_perp = s_perp 
+        
+
+
+        u_sat_k_M = self.sat_profile.fourier_mass_density(
+            k=self.fft.k,
+            mass=10**self.log10M_bincentre,
+            cosmology=self.cosmology,
+            redshift=self.redshift,
+            conc=self.conc,
+        )
+        Akari = self.fft.pk2xi(u_sat_k_M**2).T
+
+
+
+        # r_parallel_integrand = np.linspace(-r_parallel_max, -eps, nps)
+        r_parallel_integrand = np.geomspace(eps, r_parallel_max, nps)
+        r_parallel_integrand = -1.0 * r_parallel_integrand[::-1]
+
+        rr = np.sqrt(r_perp**2 + r_parallel_integrand**2)
+        Akari_integrand = np.zeros((
+            rr.shape[0],
+            rr.shape[1],
+            len(self.log10M_bincentre),
+        ))
+        for idx_mass in range(len(self.log10M_bincentre)):
+            Akari_integrand[:, :, idx_mass] = ius(
+                np.log10(self.fft.r),
+                Akari[:, idx_mass],
+                ext='zeros',
+            )(np.log10(rr))
+
+        # vlos PDF
+        vlos = (s_parallel - r_parallel_integrand) * np.sign(r_parallel_integrand)
+        pdf_vlos = pdf_vlos_1h_ss_func(
+            vlos, 
+            self.sigma_vir_halo, 
+            alpha_s=self.HOD_params.v_bias_satellites,
+        )
+
+        xiS_smu_left = simps(
+            simps(
+                Akari_integrand * pdf_vlos,
+                r_parallel_integrand,
+                axis=1,
+            ) * self.dndlog10M * self.N_sat**2 / self.N_cen,
+            self.log10M_bincentre,
+            axis=-1,
+        ).reshape((s_bincentre.shape[0], mu_bincentre.shape[0])) / (self.n_sat**2)
+
+
+
+        r_parallel_integrand = np.geomspace(eps, r_parallel_max, nps)
+        # r_parallel_integrand = np.linspace(eps, r_parallel_max, nps)
+
+        rr = np.sqrt(r_perp**2 + r_parallel_integrand**2)
+        Akari_integrand = np.zeros((
+            rr.shape[0],
+            rr.shape[1],
+            len(self.log10M_bincentre),
+        ))
+        for idx_mass in range(len(self.log10M_bincentre)):
+            Akari_integrand[:, :, idx_mass] = ius(
+                np.log10(self.fft.r),
+                Akari[:, idx_mass],
+                ext='zeros',
+            )(np.log10(rr))
+
+        # vlos PDF
+        vlos = (s_parallel - r_parallel_integrand) * np.sign(r_parallel_integrand)
+        pdf_vlos = pdf_vlos_1h_ss_func(
+            vlos, 
+            self.sigma_vir_halo, 
+            alpha_s=self.HOD_params.v_bias_satellites,
+        )
+
+        xiS_smu_right = simps(
+            simps(
+                Akari_integrand * pdf_vlos,
+                r_parallel_integrand,
+                axis=1,
+            ) * self.dndlog10M * self.N_sat**2 / self.N_cen,
+            self.log10M_bincentre,
+            axis=-1,
+        ).reshape((s_bincentre.shape[0], mu_bincentre.shape[0])) / (self.n_sat**2)
+
+
+        self.xiS_1h_ss = xiS_smu_right + xiS_smu_left
+
+        if return_multipoles:
+            xiS0 = tpcf_multipole(self.xiS_1h_ss, mu_binedge, order=0)
+            xiS2 = tpcf_multipole(self.xiS_1h_ss, mu_binedge, order=2)
+            xiS4 = tpcf_multipole(self.xiS_1h_ss, mu_binedge, order=4)
+            return s_bincentre, xiS0, xiS2, xiS4
+
+        return self.xiS_1h_ss
 
