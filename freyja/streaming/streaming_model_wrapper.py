@@ -109,6 +109,46 @@ class streaming_model:
         alpha_c=1.0,
         alpha_s=1.0,
     ):
+        r'''
+        Parameters
+        ----------
+        r_velmom : np.ndarray
+            in the unit of Mpc/h
+
+        m10 : np.ndarray
+            in the unit of km/s
+
+        c20 : np.ndarray
+            in the unit of km/s
+
+        c02 : np.ndarray
+            in the unit of km/s
+
+        c12 : np.ndarray
+            in the unit of km/s
+
+        c30 : np.ndarray
+            in the unit of km/s
+
+        c40 : np.ndarray
+            in the unit of km/s
+
+        c04 : np.ndarray
+            in the unit of km/s
+
+        c22 : np.ndarray
+            in the unit of km/s
+
+        Returns
+        -------
+        s_output_bincentre : np.array
+        xiS0 : np.array
+        xiS2 : np.array
+        xiS4 : np.array
+
+        '''
+
+
         s_output_bincentre = 0.5 * (s_output_binedge[1:] + s_output_binedge[:-1])
         mu_output_bincentre = 0.5 * (mu_output_binedge[1:] + mu_output_binedge[:-1])
 
