@@ -1,4 +1,4 @@
 # freyja
 
-![image]([https://imgur.com/a/tvyAzrB](https://imgur.com/a/dfo-freyja-tvyAzrB))
+![image](https://github.com/chzruan/freyja/blob/main/dfo_freyja.png?raw=true)
 
