@@ -94,7 +94,39 @@ def tpcf_multipole(s_mu_tcpf_result, mu_bins, order=0):
     return result
 
 
-def pdf_vlos_1h_cs_func(vlos, sigma_vir, alpha_c=0.0, alpha_s=1.0,):
+def pdf_vlos_1h_cs_func(
+    vlos, 
+    sigma_vir, 
+    alpha_c=0.0, 
+    alpha_s=1.0,
+):
+    r"""
+    Gaussian velocity PDF of the 1-halo central-satellite galaxy pairs
+
+    Parameters
+    ----------
+    vlos: np.ndarray
+        numpy array with the PDF calculated in bins of :math:`v_{\mathrm{los}}`.
+        Should have the same unit with ``sigma_vir``.
+    
+    sigma_vir: np.ndarray
+        the velocity dispersion of the host haloes. 
+        Should have the same unit with ``vlos``.
+
+    alpha_c: float
+        the velocity bias parameter of central galaxies
+
+    alpha_s: float
+        the velocity bias parameter of satellite galaxies
+
+    Returns
+    -------
+    xi_l : np.array
+        multipole of ``s_mu_tcpf_result`` of the indicated order.
+    """
+
+
+
     vlos = vlos[..., np.newaxis]
 
     stddev = np.sqrt(alpha_c**2 + alpha_s**2) * sigma_vir
@@ -108,7 +140,7 @@ def pdf_vlos_1h_cs_func(vlos, sigma_vir, alpha_c=0.0, alpha_s=1.0,):
 def pdf_vlos_1h_ss_func(vlos, sigma_vir, alpha_s=1.0,):
     vlos = vlos[..., np.newaxis]
 
-    stddev = np.sqrt(2) * alpha_s * sigma_vir
+    stddev = np.sqrt(2.0) * alpha_s * sigma_vir
     return stats.norm.pdf(
         vlos,
         loc=0.0,
@@ -241,12 +273,33 @@ class xi_1h_analy:
             redshift=self.redshift,
             cosmology=self.cosmology,
         )
-        self.xiR_1h_cs_plus1 = simps(
+        self.xiR_1h_cs = simps(
             self.dndlog10M * self.N_sat * u_sat_r_M,
             self.log10M_bincentre,
             axis=-1,
         ) / (self.n_cen * self.n_sat)
-        self.xiR_1h_cs = self.xiR_1h_cs_plus1 - 1.0
+
+        self.xiR_1h_cs[
+            np.where((self.xiR_1h_cs) < 1e-6*np.max(self.xiR_1h_cs))
+        ] = 0.0
+
+        # self.u_sat_k_M = self.sat_profile.fourier_mass_density(
+        #     k=self.fft.k,
+        #     mass=10**self.log10M_bincentre,
+        #     cosmology=self.cosmology,
+        #     redshift=self.redshift,
+        #     conc=self.conc,
+        # )
+        # xiR_1h_cs_forinterp = simps(
+        #     self.dndlog10M * self.N_sat * self.fft.pk2xi(self.u_sat_k_M).T,
+        #     self.log10M_bincentre,
+        #     axis=-1,
+        # ) / (self.n_cen * self.n_sat)
+        # self.xiR_1h_cs = ius(
+        #     np.log10(self.fft.r),
+        #     xiR_1h_cs_forinterp
+        # )(np.log10(r_bincentre))
+
 
         return self.xiR_1h_cs
 
@@ -272,14 +325,11 @@ class xi_1h_analy:
             axis=-1,
         ) / (self.n_sat**2)
 
-        self.xiR_1h_ss_plus1 = ius(
+        self.xiR_1h_ss = ius(
             np.log10(self.fft.r),
             xiR_1h_ss_forinterp,
             ext='zeros',
         )(np.log10(r_bincentre))
-
-        self.xiR_1h_ss = self.xiR_1h_ss_plus1 - 1.0
-
         return self.xiR_1h_ss
 
 
@@ -288,9 +338,9 @@ class xi_1h_analy:
         self,
         s_binedge,
         mu_binedge,
-        eps=1e-8,
+        eps=1e-6,
         nps=int(1000),
-        r_parallel_max=50.0, # don't need large
+        r_parallel_max=80.0, # don't need large
         return_multipoles=True,
     ):
         s_bincentre = 0.5 * (s_binedge[1:] + s_binedge[:-1])
@@ -366,10 +416,10 @@ class xi_1h_analy:
         self.xiS_1h_cs = xiS_smu_right + xiS_smu_left
 
         if return_multipoles:
-            xiS0 = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=0)
-            xiS2 = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=2)
-            xiS4 = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=4)
-            return s_bincentre, xiS0, xiS2, xiS4
+            self.xiS0_1h_cs = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=0)
+            self.xiS2_1h_cs = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=2)
+            self.xiS4_1h_cs = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=4)
+            return s_bincentre, self.xiS0_1h_cs, self.xiS2_1h_cs, self.xiS4_1h_cs
 
         return self.xiS_1h_cs
 
@@ -484,10 +534,109 @@ class xi_1h_analy:
         self.xiS_1h_ss = xiS_smu_right + xiS_smu_left
 
         if return_multipoles:
-            xiS0 = tpcf_multipole(self.xiS_1h_ss, mu_binedge, order=0)
-            xiS2 = tpcf_multipole(self.xiS_1h_ss, mu_binedge, order=2)
-            xiS4 = tpcf_multipole(self.xiS_1h_ss, mu_binedge, order=4)
-            return s_bincentre, xiS0, xiS2, xiS4
+            self.xiS0_1h_ss = tpcf_multipole(self.xiS_1h_ss, mu_binedge, order=0)
+            self.xiS2_1h_ss = tpcf_multipole(self.xiS_1h_ss, mu_binedge, order=2)
+            self.xiS4_1h_ss = tpcf_multipole(self.xiS_1h_ss, mu_binedge, order=4)
+            return s_bincentre, self.xiS0_1h_ss, self.xiS2_1h_ss, self.xiS4_1h_ss
 
         return self.xiS_1h_ss
 
+
+
+
+
+    def get_xi_S_1h_cs_fromsplit(
+        self,
+        s_binedge,
+        mu_binedge,
+        r_xiR1h,
+        xiR1h,
+        eps=1e-2,
+        nps=int(1000),
+        r_parallel_max=60.0, # don't need large
+        return_multipoles=True,
+    ):  
+        xiR1h_func = ius(
+            np.log10(r_xiR1h), 
+            xiR1h, 
+            ext='const',
+        )
+
+        s_bincentre = 0.5 * (s_binedge[1:] + s_binedge[:-1])
+        mu_bincentre = 0.5 * (mu_binedge[1:] + mu_binedge[:-1])
+
+        # shape: (len(r_perp), len(r_parallel), len(M))
+
+        ss = s_bincentre.reshape(-1, 1)
+        mu = mu_bincentre.reshape(1, -1)
+        s_parallel = ss * mu 
+        s_perp = ss * np.sqrt(1.0 - mu**2)
+        s_parallel = s_parallel.reshape(-1, 1)
+        s_perp = s_perp.reshape(-1, 1)
+        r_perp = s_perp 
+        
+
+        # r_parallel_integrand = np.linspace(-r_parallel_max, -eps, nps)
+        r_parallel_integrand = np.geomspace(eps, r_parallel_max, nps)
+        r_parallel_integrand = -1.0 * r_parallel_integrand[::-1]
+
+        rr = np.sqrt(r_perp**2 + r_parallel_integrand**2)
+        vlos = (s_parallel - r_parallel_integrand) * np.sign(r_parallel_integrand)
+        pdf_vlos_diffM = pdf_vlos_1h_cs_func(
+            vlos, 
+            self.sigma_vir_halo, 
+            alpha_c=self.HOD_params.v_bias_centrals,
+            alpha_s=self.HOD_params.v_bias_satellites,
+        )
+        pdf_vlos = simps(
+            pdf_vlos_diffM * self.dndlog10M * self.N_sat,
+            self.log10M_bincentre,
+            axis=-1,
+        ) / simps(
+            self.dndlog10M * self.N_sat,
+            self.log10M_bincentre,
+            axis=-1,
+        )
+        xiS_smu_left = simps(
+            (xiR1h_func(np.log10(rr))) * pdf_vlos,
+            r_parallel_integrand,
+            axis=1,
+        ).reshape((s_bincentre.shape[0], mu_bincentre.shape[0]))
+        
+
+
+        r_parallel_integrand = np.geomspace(eps, r_parallel_max, nps)
+        # r_parallel_integrand = np.linspace(eps, r_parallel_max, nps)
+
+        rr = np.sqrt(r_perp**2 + r_parallel_integrand**2)
+        vlos = (s_parallel - r_parallel_integrand) * np.sign(r_parallel_integrand)
+        pdf_vlos_diffM = pdf_vlos_1h_cs_func(
+            vlos, 
+            self.sigma_vir_halo, 
+            alpha_c=self.HOD_params.v_bias_centrals,
+            alpha_s=self.HOD_params.v_bias_satellites,
+        )
+        pdf_vlos = simps(
+            pdf_vlos_diffM * self.dndlog10M * self.N_sat,
+            self.log10M_bincentre,
+            axis=-1,
+        ) / simps(
+            self.dndlog10M * self.N_sat,
+            self.log10M_bincentre,
+            axis=-1,
+        )
+        xiS_smu_right = simps(
+            (xiR1h_func(np.log10(rr))) * pdf_vlos,
+            r_parallel_integrand,
+            axis=1,
+        ).reshape((s_bincentre.shape[0], mu_bincentre.shape[0]))
+
+        self.xiS_1h_cs = xiS_smu_right + xiS_smu_left - 1.0
+
+        if return_multipoles:
+            self.xiS0_1h_cs = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=0)
+            self.xiS2_1h_cs = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=2)
+            self.xiS4_1h_cs = tpcf_multipole(self.xiS_1h_cs, mu_binedge, order=4)
+            return s_bincentre, self.xiS0_1h_cs, self.xiS2_1h_cs, self.xiS4_1h_cs
+
+        return self.xiS_1h_cs
