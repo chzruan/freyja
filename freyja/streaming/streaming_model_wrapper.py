@@ -171,20 +171,20 @@ class streaming_model:
         r = r_velmom
         if (self.model == 'gsm'):
             self.vlos_pdf_func = moments2gaussian(
-                m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-                c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
-                c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
+                m_10=InterpolatedUnivariateSpline(r, m10, ext='const'),
+                c_20=InterpolatedUnivariateSpline(r, c20, ext='const'),
+                c_02=InterpolatedUnivariateSpline(r, c02, ext='const'),
             )
         elif (self.model == 'stsm'):
             self.vlos_pdf_func = moments2skewt(
-                m_10=InterpolatedUnivariateSpline(r, m10, ext=1),
-                c_20=InterpolatedUnivariateSpline(r, c20, ext=1),
-                c_02=InterpolatedUnivariateSpline(r, c02, ext=1),
-                c_12=InterpolatedUnivariateSpline(r, c12, ext=1),
-                c_30=InterpolatedUnivariateSpline(r, c30, ext=1),
-                c_22=InterpolatedUnivariateSpline(r, c22, ext=1),
-                c_40=InterpolatedUnivariateSpline(r, c40, ext=1),
-                c_04=InterpolatedUnivariateSpline(r, c04, ext=1)
+                m_10=InterpolatedUnivariateSpline(r, m10, ext='const'),
+                c_20=InterpolatedUnivariateSpline(r, c20, ext='const'),
+                c_02=InterpolatedUnivariateSpline(r, c02, ext='const'),
+                c_12=InterpolatedUnivariateSpline(r, c12, ext='const'),
+                c_30=InterpolatedUnivariateSpline(r, c30, ext='const'),
+                c_22=InterpolatedUnivariateSpline(r, c22, ext='const'),
+                c_40=InterpolatedUnivariateSpline(r, c40, ext='const'),
+                c_04=InterpolatedUnivariateSpline(r, c04, ext='const')
             )
         else:
             raise ValueError('wrong model!')

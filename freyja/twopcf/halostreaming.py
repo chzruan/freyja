@@ -2,7 +2,7 @@ import numpy as np
 import sys
 
 from scipy import stats, signal
-from scipy.integrate import simps
+from scipy.integrate import simpson
 from scipy.interpolate import InterpolatedUnivariateSpline as ius
 from scipy.special import legendre
 

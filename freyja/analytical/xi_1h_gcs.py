@@ -1,7 +1,7 @@
 import numpy as np
 import sys
 
-from scipy.integrate import simps
+from scipy.integrate import simpson
 from scipy.interpolate import InterpolatedUnivariateSpline as ius
 from scipy import stats, signal
 from scipy.special import legendre
@@ -217,11 +217,11 @@ class xi_1h_analy:
             galaxy=self.HOD_params,
         )
         # galaxy number density n
-        self.n_cen = simps(
+        self.n_cen = simpson(
             self.dndlog10M * self.N_cen,
             x=self.log10M_bincentre,
         )
-        self.n_sat = simps(
+        self.n_sat = simpson(
             self.dndlog10M * self.N_sat,
             x=self.log10M_bincentre,
         )
@@ -273,7 +273,7 @@ class xi_1h_analy:
             redshift=self.redshift,
             cosmology=self.cosmology,
         )
-        self.xiR_1h_cs = simps(
+        self.xiR_1h_cs = simpson(
             self.dndlog10M * self.N_sat * u_sat_r_M,
             self.log10M_bincentre,
             axis=-1,
@@ -290,7 +290,7 @@ class xi_1h_analy:
         #     redshift=self.redshift,
         #     conc=self.conc,
         # )
-        # xiR_1h_cs_forinterp = simps(
+        # xiR_1h_cs_forinterp = simpson(
         #     self.dndlog10M * self.N_sat * self.fft.pk2xi(self.u_sat_k_M).T,
         #     self.log10M_bincentre,
         #     axis=-1,
@@ -319,7 +319,7 @@ class xi_1h_analy:
             conc=self.conc,
         )
 
-        xiR_1h_ss_forinterp = simps(
+        xiR_1h_ss_forinterp = simpson(
             self.dndlog10M * self.N_sat**2 / self.N_cen * self.fft.pk2xi(self.u_sat_k_M**2).T,
             self.log10M_bincentre,
             axis=-1,
@@ -375,8 +375,8 @@ class xi_1h_analy:
             alpha_c=self.HOD_params.v_bias_centrals,
             alpha_s=self.HOD_params.v_bias_satellites,
         )
-        xiS_smu_left = simps(
-            simps(
+        xiS_smu_left = simpson(
+            simpson(
                 (0.0 + u_sat_r_M) * pdf_vlos,
                 r_parallel_integrand,
                 axis=1,
@@ -403,8 +403,8 @@ class xi_1h_analy:
             alpha_c=self.HOD_params.v_bias_centrals,
             alpha_s=self.HOD_params.v_bias_satellites,
         )
-        xiS_smu_right = simps(
-            simps(
+        xiS_smu_right = simpson(
+            simpson(
                 (0.0 + u_sat_r_M) * pdf_vlos,
                 r_parallel_integrand,
                 axis=1,
@@ -484,8 +484,8 @@ class xi_1h_analy:
             alpha_s=self.HOD_params.v_bias_satellites,
         )
 
-        xiS_smu_left = simps(
-            simps(
+        xiS_smu_left = simpson(
+            simpson(
                 Akari_integrand * pdf_vlos,
                 r_parallel_integrand,
                 axis=1,
@@ -520,8 +520,8 @@ class xi_1h_analy:
             alpha_s=self.HOD_params.v_bias_satellites,
         )
 
-        xiS_smu_right = simps(
-            simps(
+        xiS_smu_right = simpson(
+            simpson(
                 Akari_integrand * pdf_vlos,
                 r_parallel_integrand,
                 axis=1,
@@ -588,16 +588,16 @@ class xi_1h_analy:
             alpha_c=self.HOD_params.v_bias_centrals,
             alpha_s=self.HOD_params.v_bias_satellites,
         )
-        pdf_vlos = simps(
+        pdf_vlos = simpson(
             pdf_vlos_diffM * self.dndlog10M * self.N_sat,
             self.log10M_bincentre,
             axis=-1,
-        ) / simps(
+        ) / simpson(
             self.dndlog10M * self.N_sat,
             self.log10M_bincentre,
             axis=-1,
         )
-        xiS_smu_left = simps(
+        xiS_smu_left = simpson(
             (xiR1h_func(np.log10(rr))) * pdf_vlos,
             r_parallel_integrand,
             axis=1,
@@ -616,16 +616,16 @@ class xi_1h_analy:
             alpha_c=self.HOD_params.v_bias_centrals,
             alpha_s=self.HOD_params.v_bias_satellites,
         )
-        pdf_vlos = simps(
+        pdf_vlos = simpson(
             pdf_vlos_diffM * self.dndlog10M * self.N_sat,
             self.log10M_bincentre,
             axis=-1,
-        ) / simps(
+        ) / simpson(
             self.dndlog10M * self.N_sat,
             self.log10M_bincentre,
             axis=-1,
         )
-        xiS_smu_right = simps(
+        xiS_smu_right = simpson(
             (xiR1h_func(np.log10(rr))) * pdf_vlos,
             r_parallel_integrand,
             axis=1,
