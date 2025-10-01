@@ -3,7 +3,6 @@ import sys
 from scipy.interpolate import InterpolatedUnivariateSpline
 
 from gsm.models.skewt.from_radial_transverse import moments2skewt
-from gsm.models.skewt.from_radial_transverse_gcs import moments2skewt_cc
 
 from gsm.models.gaussian.from_radial_transverse import moments2gaussian
 from gsm.streaming_integral import real2redshift

@@ -1,0 +1,29 @@
+basic:
+    gravity: 'GR'
+    dataflag: 'LOWZ'
+    snapnum: 137
+    redshift: 0.25
+    boxsize: 1024.0
+    log10M_halo_range: [12.50, 17.00]
+    datasets: [' ']
+
+
+measure:
+    r_xiR_binning: 'log'
+    r_xiR_min: 0.10
+    r_xiR_max: 120.0
+    r_xiR_binnum: 40
+    r_velmom_binning: 'log'
+    r_velmom_min: 0.7
+    r_velmom_max: 120.0
+    r_velmom_binnum: 60
+    s_xiS_binning: 'lin'
+    s_xiS_min: 0.9
+    s_xiS_max: 120.9
+    s_xiS_binnum: 60
+    mu_xiS_binning: 'lin'
+    mu_xiS_min: -1.0
+    mu_xiS_max: 1.0
+    mu_xiS_binnum: 512
+
+

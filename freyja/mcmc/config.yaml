@@ -1,0 +1,123 @@
+# ---------------------------
+# MCMC & Analysis Settings
+# ---------------------------
+basic: 
+    gravity: 'LCDM' # 'LCDM' or 'fR'
+
+mcmc:
+    warmup: 50000
+    samples: 1000000
+    chains: 4
+    target_accept_prob: 0.9
+    output_path: "/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/mcmc_gemini/chains/" # output file name: 
+    prng_key: 0
+
+analysis:
+    smin: 1.0  # In the unit of Mpc/h; scale cut for correlation functions
+    use_log_ng: True # If True, use log10(n_g) in the likelihood
+    density_relerr: 0.05 # relative 1-sigma error on n_g data, 5% (0.05) by default
+
+LCDM:
+    # ---------------------------
+    # Data File Paths
+    # ---------------------------
+    data_paths:
+        # Mean xi0/xi2 from the Planck cosmology simulations
+        xi_data: "../../data/xiSgcs_LCDM_LOWZ-weakvelbias_z0.25.hdf5"
+        # Covariance matrix for xi0/xi2
+        covariance: "../../data/cov_xi02_abcs_small.npy"
+        # Galaxy number density data from 100 GLAM boxes
+        galaxy_density: "../../data/ng_LCDM_LOWZ-weakvelbias_z0.25.txt"
+
+    # ---------------------------
+    # Emulator Configurations
+    # ---------------------------
+    emulators:
+        xi0:
+            ckpt_path: "../../trained/epoch=1791-step=46592.ckpt"
+            hparams_path: "../../trained/hparams.yaml"
+            prefix: "mlp.mlp"
+        xi2:
+            ckpt_path: "../../trained/epoch=940-step=117625.ckpt"
+            hparams_path: "../../trained/hparams.yaml"
+            prefix: "mlp.mlp"
+        hmf:
+            ckpt_path: '/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/train_hmf/emulators/epoch=1756-step=275849.ckpt'
+            prefix: "mlp.mlp"
+            # Path to the mass bin definitions used for training the HMF emulator
+            log10M_edges_path: '/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/train_hmf/data/log10M_binleftedge.npy'
+            # Whether the emulator outputs log10(cHMF) or linear cHMF
+            output_format: "log10" # choices: "log10", "linear"
+        log10ng:
+            ckpt_path: '../../trained/epoch=1039-step=54080.ckpt'
+            prefix: "mlp.mlp"
+            # Whether the emulator outputs log10(n_g) or linear n_g
+            output_format: "log10" # choices: "log10", "linear"
+
+
+
+
+    # ---------------------------
+    # Parameter Priors (Uniform)
+    # ---------------------------
+    # Order matters for indexing into the theta vector
+    parameters:
+        Om0:      [0.15, 0.45]
+        h:        [0.60, 0.80]
+        S8:       [0.65, 0.95]
+        ns:       [0.94, 0.99]
+        logMcut:  [12.8, 13.8]
+        logM1:    [13.2, 14.5]
+        logsigma: [-0.69897, -0.04575749]
+        alpha:    [0.8, 1.2]
+        alpha_c:  [0.5, 1.5]
+        alpha_s:  [0.5, 1.5]
+
+
+fR:
+    data_paths:
+        # Mean xi0/xi2 from the Planck cosmology simulations
+        xi_data: "../../data/xiSgcs_F5n1_LOWZ-weakvelbias_z0.25.hdf5"
+        # Covariance matrix for xi0/xi2
+        covariance: "../../data/cov_xi02_abcs_small.npy"
+        # Galaxy number density data from 100 GLAM boxes
+        galaxy_density: "../../data/ng_F5n1_LOWZ-weakvelbias_z0.25.txt"
+
+    emulators:
+        xi0:
+            ckpt_path: "/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/train_xiS/emulators/xiS0_gg_smoothed_fRn1/epoch=1383-step=35984.ckpt"
+            hparams_path: "/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/train_xiS/emulators/xiS0_gg_smoothed_fRn1/lightning_logs/version_0/hparams.yaml"
+            prefix: "mlp.mlp"
+        xi2:
+            ckpt_path: "/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/train_xiS/emulators/xiS2_trans_gg_smoothed_fRn1/epoch=1058-step=132375.ckpt"
+            hparams_path: "/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/train_xiS/emulators/xiS2_trans_gg_smoothed_fRn1/lightning_logs/version_0/hparams.yaml"
+            prefix: "mlp.mlp"
+        hmf:
+            ckpt_path: '/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/train_hmf/emulators/epoch=1756-step=275849.ckpt'
+            prefix: "mlp.mlp"
+            # Path to the mass bin definitions used for training the HMF emulator
+            log10M_edges_path: '/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/train_hmf/data/log10M_binleftedge.npy'
+            # Whether the emulator outputs log10(cHMF) or linear cHMF
+            output_format: "log10" # choices: "log10", "linear"
+        log10ng:
+            ckpt_path: '/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/train_ng/emulators/log10ng_fRn1/epoch=1136-step=59124.ckpt'
+            prefix: "mlp.mlp"
+            # Whether the emulator outputs log10(n_g) or linear n_g
+            output_format: "log10" # choices: "log10", "linear"
+
+    # ---------------------------
+    # Parameter Priors (Uniform)
+    # ---------------------------
+    # Order matters for indexing into the theta vector
+    parameters:
+        Om0         : [0.15, 0.45]
+        h           : [0.60, 0.80]
+        S8          : [0.65, 0.95]
+        ns          : [0.94, 0.99]
+        log10fR0abs : [-8.0, -4.0]
+        logMcut     : [12.8, 13.8]
+        logM1       : [13.2, 14.5]
+        logsigma    : [-0.69897, -0.04575749]
+        alpha       : [0.8, 1.2]
+        alpha_c     : [0.5, 1.5]
+        alpha_s     : [0.5, 1.5]

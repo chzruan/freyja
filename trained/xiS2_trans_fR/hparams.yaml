@@ -1,0 +1,19 @@
+act_fn: SiLU
+coordinates: null
+dropout_rate: 0.0
+learning_rate: 0.0001
+loss: mae
+n_hidden:
+- 128
+- 128
+n_input: 11
+n_output: 33
+scheduler_factor: 0.5
+scheduler_patience: 30
+scheduler_threshold: 1.0e-06
+standarize_input: true
+standarize_output: true
+training: true
+transform_input: null
+transform_output: null
+weight_decay: 0.0

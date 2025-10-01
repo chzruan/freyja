@@ -1,0 +1,37 @@
+# pyproject.toml
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "freyja"
+version = "0.1.0"
+description = "A package for the halo streaming model in cosmology."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+
+# Add all required libraries here
+dependencies = [
+    "numpy",
+    "h5py",
+    "torch",
+    "pyyaml",
+    "jax",
+    "flax",
+    "numpyro",
+    "getdist",
+    "matplotlib",
+]
+
+[project.scripts]
+# command-line tool `freyja-run` after installation
+freyja-run = "freyja.main:cli_entrypoint"
+freyja-plot = "freyja.plot_posterior:cli_entrypoint" # <-- Add this
