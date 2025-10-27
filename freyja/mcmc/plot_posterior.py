@@ -41,7 +41,7 @@ cosmo_latex_labels_dict = {
 LATEX_LABELS = cosmo_latex_labels_dict | HOD_latex_labels_dict
 
 
-def load_target_params():
+def load_target_params(target: str = "fid") -> dict:
     Fiducial_params = [
         0.3089,
         0.6774,
@@ -135,7 +135,7 @@ def create_triangle_plot(npz_path: str, output_path: str):
             [mcsamples],         # Pass samples as a list
             filled=True,
             params=params,
-            markers=target_params,
+            # markers=target_params,
         )
 
         # Add a title with information from the filename

@@ -16,6 +16,11 @@ class SiLU(nn.Module):
     def __call__(self, x):
         return jax.nn.silu(x)
 
+class GELU(nn.Module):
+    @nn.compact
+    def __call__(self, x):
+        return jax.nn.gelu(x)
+
 class FCNStd(nn.Module):
     """
     Generic MLP with input/output standardization.
@@ -122,7 +127,7 @@ def _cfg_to_fcnstd(cfg: Dict[str, Any]) -> Dict[str, Any]:
         raise KeyError("Cannot find n_input/n_output/n_hidden in hparams.yaml")
     return {
         "n_input": int(n_input), "n_output": int(n_output),
-        "n_hidden": [int(h) for h in n_hidden], "activation": cfg.get("activation", "silu"),
+        "n_hidden": [int(h) for h in n_hidden], "activation": cfg.get("act_fn", "SiLU"),
         "standarize_input": bool(cfg.get("standarize_input", True)),
         "standarize_output": bool(cfg.get("standarize_output", True)),
     }

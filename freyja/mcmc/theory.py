@@ -25,7 +25,7 @@ def xiS2_trans_inverse(xiS2_trans: jnp.ndarray, aa: float = 0.1) -> jnp.ndarray:
     return jnp.sign(xiS2_trans) * aa * (jnp.exp(jnp.abs(xiS2_trans)) - 1.0)
 
 
-def _load_emulator(config: Dict[str, Any], key: random.PRNGKey, n_input: int, n_output: int, hidden: tuple) -> (FCNStd, Dict):
+def _load_emulator(config: Dict[str, Any], key: random.PRNGKey, n_input: int, n_output: int, hidden: tuple, activation: str = 'GELU') -> (FCNStd, Dict):
     """Helper to initialize a Flax model and load its weights from a checkpoint."""
     model = FCNStd(n_input=n_input, n_output=n_output, n_hidden=hidden)
     variables = model.init(key, jnp.zeros((1, n_input)))
@@ -45,20 +45,20 @@ def setup_emulators(config: Dict[str, Any], N_bins: int) -> Dict[str, Any]:
     std0 = _cfg_to_fcnstd(cfg0)
     assert std0['n_output'] == N_bins, f"xi0 emulator output ({std0['n_output']}) != data bins ({N_bins})"
     emulators['xi0_model'], emulators['xi0_vars'] = _load_emulator(
-        config['xi0'], random.PRNGKey(123), std0['n_input'], std0['n_output'], std0['n_hidden'])
+        config['xi0'], random.PRNGKey(123), std0['n_input'], std0['n_output'], std0['n_hidden'], std0['activation'])
     
     # xi2 emulator
     cfg2 = _load_yaml(config['xi2']['hparams_path'])
     std2 = _cfg_to_fcnstd(cfg2)
     assert std2['n_output'] == N_bins, f"xi2 emulator output ({std2['n_output']}) != data bins ({N_bins})"
     emulators['xi2_model'], emulators['xi2_vars'] = _load_emulator(
-        config['xi2'], random.PRNGKey(124), std2['n_input'], std2['n_output'], std2['n_hidden'])
+        config['xi2'], random.PRNGKey(124), std2['n_input'], std2['n_output'], std2['n_hidden'], std0['activation'])
 
     # HMF emulator
     n_in, n_out, hidden = inspect_ckpt_dims(config['hmf']['ckpt_path'], config['hmf']['prefix'])
     assert n_in == 4, f"HMF emulator expects 4 cosmology inputs, got {n_in}"
     emulators['hmf_model'], emulators['hmf_vars'] = _load_emulator(
-        config['hmf'], random.PRNGKey(456), n_in, n_out, hidden)
+        config['hmf'], random.PRNGKey(456), n_in, n_out, hidden, std0['activation'])
     
     # Load HMF mass bins
     log10M_edges = np.load(config['hmf']['log10M_edges_path'])
@@ -70,7 +70,7 @@ def setup_emulators(config: Dict[str, Any], N_bins: int) -> Dict[str, Any]:
     # log10ng emulator
     n_in, n_out, hidden = inspect_ckpt_dims(config['log10ng']['ckpt_path'], config['log10ng']['prefix'])
     emulators['log10ng_model'], emulators['log10ng_vars'] = _load_emulator(
-        config['log10ng'], random.PRNGKey(456), n_in, n_out, hidden)
+        config['log10ng'], random.PRNGKey(456), n_in, n_out, hidden, std0['activation'])
 
     return emulators
 

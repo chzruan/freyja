@@ -20,12 +20,11 @@ import numpyro
 import numpyro.distributions as dist
 from numpyro.infer import NUTS, MCMC
 
-# Use relative imports for package modules
 from . import data_loader
 from . import theory
 from . import plot_posterior
 
-def run_analysis(config_path: str, progress_bar: bool = True):
+def run_analysis(config_path: str, progress_bar: bool = True, target_model: str = None):
     """Orchestrates the MCMC analysis pipeline from a config file."""
     
     # 1. Load Configuration
@@ -36,6 +35,10 @@ def run_analysis(config_path: str, progress_bar: bool = True):
     gravity         = cfg_basic['gravity']
     cfg_mcmc        = config['mcmc']
     cfg_analysis    = config['analysis']
+    if target_model is not None:
+        target = target_model
+    else:
+        target = cfg_analysis["target"]
 
     cfg_data        = config[gravity]['data_paths']
     cfg_params      = config[gravity]['parameters']
@@ -46,7 +49,7 @@ def run_analysis(config_path: str, progress_bar: bool = True):
 
 
     # 2. Load and Prepare Data
-    s_full, data_full = data_loader.load_correlation_functions(cfg_data['xi_data'])
+    s_full, data_full = data_loader.load_correlation_functions(cfg_data[target]['xi_data'])
     cov_full = data_loader.load_covariance(cfg_data['covariance'])
     N_bins = len(s_full)
     
@@ -63,7 +66,7 @@ def run_analysis(config_path: str, progress_bar: bool = True):
     prec_mat = jsp.linalg.solve_triangular(L, jnp.eye(L.shape[0]), lower=True).T @ \
                jsp.linalg.solve_triangular(L, jnp.eye(L.shape[0]), lower=True)
     
-    n_data = data_loader.load_galaxy_density(cfg_data['galaxy_density'], cfg_analysis['use_log_ng'])
+    n_data = data_loader.load_galaxy_density(cfg_data[target]['galaxy_density'], cfg_analysis['use_log_ng'])
     sigma_n = np.abs(cfg_analysis['density_relerr'] * n_data)
     if cfg_analysis['use_log_ng']:
         print(f"Using n_data = {n_data:.4f} with sigma_n = {sigma_n:.4f}")
@@ -107,7 +110,7 @@ def run_analysis(config_path: str, progress_bar: bool = True):
     samples = cfg_mcmc['samples']
     smin = cfg_analysis['smin']
     density_str = "uselogng" if cfg_analysis['use_log_ng'] else "useng"
-    output_filename = f"L{samples:.0e}_smin{smin:.0f}_{density_str}.npz"
+    output_filename = f"L{samples:.0e}_smin{smin:.0f}_{density_str}_{target}.npz"
     Path(cfg_mcmc['output_path']).mkdir(parents=True, exist_ok=True)
     np.savez(
         Path(cfg_mcmc['output_path']) / Path(output_filename),

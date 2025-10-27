@@ -37,10 +37,10 @@ df_train = pd.DataFrame({
 })
 
 df_test = pd.DataFrame({
-    'Om0': cosmos[54:-1, 0],
-    'h':   cosmos[54:-1, 1],
-    'S8':  cosmos[54:-1, 3],
-    'ns':  cosmos[54:-1, 2],
+    'Om0': cosmos[54:, 0],
+    'h':   cosmos[54:, 1],
+    'S8':  cosmos[54:, 3],
+    'ns':  cosmos[54:, 2],
     "dataset": r"$\mathrm{test}$",
 })
 
