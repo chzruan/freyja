@@ -33,6 +33,7 @@ df_train = pd.DataFrame({
     'h':   cosmos[1:54, 1],
     'S8':  cosmos[1:54, 3],
     'ns':  cosmos[1:54, 2],
+    'fR':  cosmos[1:54, 4],
     "dataset": r"$\mathrm{train}$",
 })
 
@@ -41,6 +42,7 @@ df_test = pd.DataFrame({
     'h':   cosmos[54:, 1],
     'S8':  cosmos[54:, 3],
     'ns':  cosmos[54:, 2],
+    'fR':  cosmos[54:, 4],
     "dataset": r"$\mathrm{test}$",
 })
 
@@ -61,6 +63,7 @@ df = df.rename(columns={
     'h':   r'$h$',
     'S8':  r'$S_{8}$',
     'ns':  r'$n_{\mathrm{s}}$',
+    'fR':  r'$\log|f_{R0}|$',
 })
 
 # ---------------------------
@@ -92,7 +95,7 @@ sns.move_legend(
 
 # Save figure
 pair.fig.savefig(
-    "./figs/cosmoparams_lcdm.pdf",
+    "./figs/cosmoparams_fR.pdf",
     bbox_inches="tight",
     pad_inches=0.05,
 )
