@@ -1,0 +1,6 @@
+====
+Starting job 9363285 at Tue 20 Jan 18:43:33 GMT 2026 for user dc-ruan1.
+Running on nodes: m8504
+====
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           9363285    cosma8 DE2testL dc-ruan1  R       0:02      1 m8504

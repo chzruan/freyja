@@ -10,28 +10,63 @@ from pytorch_lightning.callbacks import (
 )
 
 # Local imports
-from .config import HP
-from .data.io import load_cosmology_wrapper, load_xihh_data, load_ximm_data
-from .data.dataset import HaloBetaDataset
-from .models.net import BetaNet
-from .utils.plotting import plot_validation_results
+from ..cosma.xi_hh import load_cosmology_wrapper, load_xihh_data, load_ximm_data
+from .xi_R_hh_diffM_dataset import HaloBetaDataset
+from .xi_R_hh_diffM_network import BetaNet, HP
+from .utils_plotting import plot_validation_results
+
+# --- 1. Define Default Path ---
+MODULE_DIR = Path(__file__).parent
+DEFAULT_CKPT_PATH = MODULE_DIR / "checkpoints" / "halo_beta.pt"
 
 
 class HaloBetaEmulator:
-    def __init__(self, save_dir="."):
+    def __init__(self, checkpoint_path=DEFAULT_CKPT_PATH, save_dir="."):
         self.save_dir = Path(save_dir)
         self.model = None
         self.scalers = {}
         self.r_bins = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        if checkpoint_path is not None:
+            ckpt = Path(checkpoint_path)
+            if ckpt.exists():
+                try:
+                    self.load(ckpt)
+                    print(f"Successfully loaded the emulator from: {ckpt}")
+                except Exception as e:
+                    print(f"Warning: Could not load the emulator at {ckpt}. Error: {e}")
+            else:
+                print(
+                    f"Note: Default checkpoint not found at {ckpt}. Initialized empty emulator."
+                )
+
     def _prepare_inputs(self, imodel, r_mask, mask_M, logM_bins):
-        """Helper to process one simulation model."""
+        """
+        Prepare masked halo-halo 2PCF xi_hh(r | logM1, logM2) inputs of cosmology-imodel for emulator training.
+
+        Parameters
+        ----------
+        imodel : int
+            1-64. Identifier of the cosmological model to load correlation data for.
+        r_mask : ndarray of bool
+            Mask selecting the radial bins (r) to retain.
+        mask_M : ndarray of bool
+            Mask selecting the halo-mass bins to retain.
+        logM_bins : ndarray
+            Logarithmic halo-mass bin centers corresponding to the masked data.
+        Returns
+        -------
+        tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]
+            - inputs: concatenated cosmology parameters with symmetric/antisymmetric
+              mass combinations (u, v) for each halo-mass pair.
+            - targets: beta = xi_hh / xi_mm values for the selected r bins.
+            - weights: inverse-variance weights computed from beta uncertainties.
+        """
         try:
             cosmo = load_cosmology_wrapper(imodel)
             _, _, xi_hh, xi_sem = load_xihh_data(imodel)
             # Retrieve full r array from IO to match mask
-            # (In production, optimize this to avoid reloading r repeatedly)
             r_all, _, _, _ = load_xihh_data(1)
             xi_mm = load_ximm_data(r_all, imodel)
 
@@ -110,7 +145,12 @@ class HaloBetaEmulator:
         )
         val_loader = DataLoader(val_set, batch_size=HP["batch_size"], num_workers=4)
 
-        self.model = BetaNet(X.shape[1], Y.shape[1], self.scalers)
+        self.model = BetaNet(
+            X.shape[1],
+            Y.shape[1],
+            self.scalers,
+            HP,
+        )
 
         checkpoint = ModelCheckpoint(monitor="val_mse", save_top_k=1, mode="min")
         trainer = pl.Trainer(
@@ -150,7 +190,12 @@ class HaloBetaEmulator:
         input_dim = len(self.scalers["in_mean"])
         output_dim = len(self.scalers["tgt_mean"])
 
-        self.model = BetaNet(input_dim, output_dim, self.scalers)
+        self.model = BetaNet(
+            input_dim,
+            output_dim,
+            self.scalers,
+            checkpoint["hp"],
+        )
         self.model.load_state_dict(checkpoint["state_dict"])
         self.model.to(self.device)
         self.model.eval()

@@ -1,0 +1,50 @@
+====
+Starting job 9362571 at Tue 20 Jan 16:45:08 GMT 2026 for user dc-ruan1.
+Running on nodes: m8464
+====
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           9362571    cosma8 DE2testL dc-ruan1  R       0:02      1 m8464
+Initializing Halo Bias GP Emulator...
+Processing simulation data for GP...
+Data Prepared. N_samples: 7080
+Target Mean: 1.8194, Std: 1.0085
+Training GP with Optax (Adam, lr=0.1, steps=500)...
+Step    0 | Loss: -3942.8754
+Step  100 | Loss: -7302.1500
+Step  200 | Loss: -7302.2145
+Step  300 | Loss: -7302.2145
+Step  400 | Loss: -7302.2145
+Final Loss: -7302.2145
+Optimized Params: {'log_amp': Array(-1.38929806, dtype=float64), 'log_scale': Array([-0.10705071,  1.84795115,  0.09712092,  2.51325009, -1.12518568,
+       -0.5594416 ], dtype=float64)}
+Training completed.
+GP Emulator saved to ../../freyja/emulators/checkpoints/halo_bias_gp_v1.npz
+Training complete. Model saved to ../../freyja/emulators/checkpoints/halo_bias_gp_v1.npz
+
+Reloading emulator from disk for testing...
+GP Emulator loaded from ../../freyja/emulators/checkpoints/halo_bias_gp_v1.npz
+Predicting bias for Cosmo=[0.31 0.67 0.82 0.96], logM1=13.5, logM2=13.5...
+--- Evaluating GP Emulator on Model 61 [Test] ---
+Metrics: Chi2/dof = 46.8912
+Metrics: MSE      = 4.32e-02
+Metrics: Mean %Err= 3.89%
+Validation plot saved to gp_validation_model_61_Test.png
+Predicted Bias B12: 3.3276 +/- 0.0326
+--- Evaluating GP Emulator on Model 62 [Test] ---
+Metrics: Chi2/dof = 42.9866
+Metrics: MSE      = 1.24e+00
+Metrics: Mean %Err= 7.33%
+Validation plot saved to gp_validation_model_62_Test.png
+Predicted Bias B12: 3.3276 +/- 0.0326
+--- Evaluating GP Emulator on Model 63 [Test] ---
+Metrics: Chi2/dof = 41.5456
+Metrics: MSE      = 2.54e-02
+Metrics: Mean %Err= 4.79%
+Validation plot saved to gp_validation_model_63_Test.png
+Predicted Bias B12: 3.3276 +/- 0.0326
+--- Evaluating GP Emulator on Model 64 [Test] ---
+Metrics: Chi2/dof = 72.0168
+Metrics: MSE      = 1.68e-02
+Metrics: Mean %Err= 5.01%
+Validation plot saved to gp_validation_model_64_Test.png
+Predicted Bias B12: 3.3276 +/- 0.0326
