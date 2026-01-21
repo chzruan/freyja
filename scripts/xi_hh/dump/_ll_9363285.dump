@@ -4,3 +4,47 @@ Running on nodes: m8504
 ====
              JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
            9363285    cosma8 DE2testL dc-ruan1  R       0:02      1 m8504
+Initializing Halo Bias GP Emulator...
+Processing simulation data for GP...
+Data Prepared. N_samples: 10089
+Target Mean: 2.3265, Std: 1.5822
+Training GP with Optax (Adam, lr=0.1, steps=500)...
+Step    0 | Loss: -5942.3208
+Step  100 | Loss: -11129.0824
+Step  200 | Loss: -11129.1378
+Step  300 | Loss: -11129.1378
+Step  400 | Loss: -11129.1378
+Final Loss: -11129.1378
+Optimized Params: {'log_amp': Array(-1.49345974, dtype=float64), 'log_scale': Array([-0.20082424,  2.11262161,  0.18392724,  2.74534741, -1.3009219 ,
+       -0.73059471], dtype=float64)}
+Training completed.
+GP Emulator saved to ../../freyja/emulators/checkpoints/halo_bias_gp_v1.npz
+Training complete. Model saved to ../../freyja/emulators/checkpoints/halo_bias_gp_v1.npz
+
+Reloading emulator from disk for testing...
+GP Emulator loaded from ../../freyja/emulators/checkpoints/halo_bias_gp_v1.npz
+Predicting bias for Cosmo=[0.31 0.67 0.82 0.96], logM1=13.5, logM2=13.5...
+--- Evaluating GP Emulator on Model 61 [Test] ---
+Metrics: Chi2/dof = 9.8877
+Metrics: MSE      = 1.13e-03
+Metrics: Mean %Err= 1.66%
+Validation plot saved to gp_validation_model_61_Test.png
+Predicted Bias B12: 3.3223 +/- 0.0338
+--- Evaluating GP Emulator on Model 62 [Test] ---
+Metrics: Chi2/dof = 6.9168
+Metrics: MSE      = 7.74e-02
+Metrics: Mean %Err= 3.58%
+Validation plot saved to gp_validation_model_62_Test.png
+Predicted Bias B12: 3.3223 +/- 0.0338
+--- Evaluating GP Emulator on Model 63 [Test] ---
+Metrics: Chi2/dof = 24.1935
+Metrics: MSE      = 4.83e-03
+Metrics: Mean %Err= 3.65%
+Validation plot saved to gp_validation_model_63_Test.png
+Predicted Bias B12: 3.3223 +/- 0.0338
+--- Evaluating GP Emulator on Model 64 [Test] ---
+Metrics: Chi2/dof = 48.6551
+Metrics: MSE      = 5.80e-03
+Metrics: Mean %Err= 3.85%
+Validation plot saved to gp_validation_model_64_Test.png
+Predicted Bias B12: 3.3223 +/- 0.0338

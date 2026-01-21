@@ -7,6 +7,10 @@ from pathlib import Path
 import optax
 from ..cosma.xi_hh import load_cosmology_wrapper, load_xihh_data, load_ximm_data
 
+MODULE_DIR = Path(__file__).parent
+DEFAULT_CKPT_PATH = MODULE_DIR / "checkpoints" / "halo_bias_gp.npz"
+
+
 # --- GP Utilities ---
 HP = {
     # Data Constraints
@@ -54,10 +58,10 @@ class HaloBiasEmulator:
     Gaussian Process Emulator for the scalar Halo Bias B12(M1, M2).
 
     Predicts the weighted average of xi_hh(r)/xi_mm(r) using a GP
-    mapping (Cosmology, u, v) -> Bias.
+    mapping (Cosmology, u, v) -> Bias, where u = (logM1 + logM2)/2 and v = (logM1 - logM2)/2.
     """
 
-    def __init__(self, saved_path=None, hp=HP):
+    def __init__(self, saved_path=DEFAULT_CKPT_PATH, hp=HP):
         self.hp = hp
         self.params = None
         self.X_train = None
@@ -245,6 +249,84 @@ class HaloBiasEmulator:
 
         return bias_pred, bias_std
 
+    def predict_matrix(self, cosmo_params, logM_bins):
+        """
+        Fast evaluation of the emulator for a 2D grid of mass bins.
+
+        Parameters
+        ----------
+        cosmo_params : np.ndarray
+            1D array of cosmological parameters.
+        logM_bins : np.ndarray
+            1D array of logarithmic halo-mass bin centers.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            - bias_matrix: 2D array of shape (N_M, N_M) containing the predicted bias.
+            - error_matrix: 2D array of shape (N_M, N_M) containing the prediction uncertainty.
+        """
+        if self.params is None:
+            raise ValueError("GP not trained or loaded.")
+
+        N_M = len(logM_bins)
+
+        # 1. Generate indices for the upper triangle (including diagonal)
+        # This reduces GP calls by ~50%
+        idx_i, idx_j = np.triu_indices(N_M)
+
+        m1 = logM_bins[idx_i]
+        m2 = logM_bins[idx_j]
+
+        # 2. Compute symmetric (u) and antisymmetric (v) coordinates
+        # Note: v = (m1 - m2)/2 corresponds to the training definition.
+        # Since we use triu_indices, idx_j >= idx_i. If bins are sorted, m2 >= m1, so v <= 0.
+        u = (m1 + m2) / 2.0
+        v = (m1 - m2) / 2.0
+
+        # 3. Construct batch input: [cosmo_params, u, v]
+        n_pairs = len(u)
+        cosmo_batch = np.tile(cosmo_params, (n_pairs, 1))
+        raw_in = np.column_stack([cosmo_batch, u, v])
+
+        # 4. Normalize inputs using the emulator's stored stats
+        norm_in = (raw_in - self.x_mean) / self.x_std
+        X_test = jnp.array(norm_in)
+
+        # 5. Batch Prediction (Vectorized in JAX)
+        # Re-construct the GP computational graph with trained parameters
+        gp = build_gp(self.params, self.X_train, self.Y_err_train)
+        cond = gp.condition(self.Y_train, X_test)
+
+        # Extract normalized mean and variance
+        mu_norm = cond.gp.mean
+        var_norm = cond.gp.variance
+
+        # 6. Un-normalize outputs
+        # Mean: mu = mu_norm * y_std + y_mean
+        bias_pred_flat = (mu_norm * self.y_std) + self.y_mean
+
+        # Error: sigma = sqrt(var_norm) * y_std
+        bias_std_flat = jnp.sqrt(var_norm) * self.y_std
+
+        # 7. Fill the symmetric output matrices
+        # Convert JAX arrays back to NumPy for easier downstream handling
+        bias_pred_flat = np.array(bias_pred_flat)
+        bias_std_flat = np.array(bias_std_flat)
+
+        bias_matrix = np.zeros((N_M, N_M))
+        err_matrix = np.zeros((N_M, N_M))
+
+        # Fill upper triangle
+        bias_matrix[idx_i, idx_j] = bias_pred_flat
+        err_matrix[idx_i, idx_j] = bias_std_flat
+
+        # Fill lower triangle (symmetry)
+        bias_matrix[idx_j, idx_i] = bias_pred_flat
+        err_matrix[idx_j, idx_i] = bias_std_flat
+
+        return bias_matrix, err_matrix
+
     def save(self, path):
         """Saves the GP state."""
         if self.params is None:
@@ -281,7 +363,6 @@ class HaloBiasEmulator:
 
         self.x_mean = data["x_mean"]
         self.x_std = data["x_std"]
-        # Handle backward compatibility if you have old files without y stats
         self.y_mean = data.get("y_mean", 0.0)
         self.y_std = data.get("y_std", 1.0)
 

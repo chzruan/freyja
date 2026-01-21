@@ -8,15 +8,20 @@ import numpy as np
 from scipy.interpolate import InterpolatedUnivariateSpline
 from tinygp import GaussianProcess, kernels
 from tinygp.helpers import dataclass
+from pathlib import Path
 
 from hmf import MassFunction
 from astropy.cosmology import FlatLambdaCDM
 from scipy.optimize import curve_fit
 
+# --- 1. Define Default Path ---
+MODULE_DIR = Path(__file__).parent
+DEFAULT_CKPT_PATH = MODULE_DIR / "checkpoints" / "gp_cHMFratio_LCDM_wide64_z0.25.npz"
+
 
 @dataclass
 class RBFKernel(kernels.Kernel):
-    """
+    r"""
     Radial Basis Function (RBF) kernel with anisotropic length-scales.
 
     This kernel implements the squared exponential covariance:
@@ -156,8 +161,8 @@ class HMFEmulator:
 
     def __init__(
         self,
-        gp_emulator_path: str,
-        z: float,
+        gp_emulator_path: Path = DEFAULT_CKPT_PATH,
+        z: float = 0.25,
     ) -> None:
         """
         Initialize the emulator by loading trained GP weights.
@@ -304,6 +309,16 @@ class HMFEmulator:
 
         cHMF_emu = self.cumulative_hmf(cosmo_params, _lmble)
         return -np.diff(cHMF_emu) / dlog10M
+
+    def get_dndlog10M(
+        self,
+        cosmo_params: np.ndarray,
+        log10M_bincentres: np.ndarray,
+        dlog10M: float = 0.10,
+    ) -> np.ndarray:
+        """Wrapper for dndlog10M."""
+        val = self.dndlog10M(cosmo_params, log10M_bincentres, dlog10M)
+        return val
 
     def differential_hmf(
         self,

@@ -25,7 +25,7 @@ def run_training():
     emulator.train()
     print("Training completed.")
     # --- 2. Save the Trained Model ---
-    save_path = "../../freyja/emulators/checkpoints/halo_bias_gp_v1.npz"
+    save_path = "../../freyja/emulators/checkpoints/halo_bias_gp.npz"
     emulator.save(save_path)
     print(f"Training complete. Model saved to {save_path}")
 

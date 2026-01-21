@@ -216,6 +216,64 @@ class HaloBetaEmulator:
             (norm_out * self.scalers["tgt_std"]) + self.scalers["tgt_mean"],
         )
 
+    def predict_matrix(self, cosmo_params, logM_bins):
+        """
+        Fast evaluation of the emulator for a 2D grid of mass bins.
+
+        Parameters
+        ----------
+        cosmo_params : np.ndarray
+            1D array of cosmological parameters.
+        logM_bins : np.ndarray
+            1D array of logarithmic halo-mass bin centers.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            - r_bins: The radial bins associated with the predictions.
+            - beta_matrix: 3D array of shape (N_M, N_M, N_r_bins) containing the
+              predicted beta values. The matrix is symmetric in the first two dimensions.
+        """
+        if self.model is None:
+            raise ValueError("Model not loaded")
+
+        N_M = len(logM_bins)
+
+        # 1. Generate indices for the upper triangle (including diagonal)
+        # This reduces compute by ~50% and respects the symmetry of the problem.
+        idx_i, idx_j = np.triu_indices(N_M)
+
+        m1 = logM_bins[idx_i]
+        m2 = logM_bins[idx_j]
+
+        # 2. Compute symmetric (u) and antisymmetric (v) coordinates
+        u = (m1 + m2) / 2.0
+        # Ensure v is negative to match the training domain (j >= i implies m2 >= m1 for sorted bins)
+        v = -np.abs(m1 - m2) / 2.0
+
+        # 3. Construct batch input: [cosmo_params, u, v]
+        n_pairs = len(u)
+        cosmo_batch = np.tile(cosmo_params, (n_pairs, 1))
+        raw_in = np.column_stack([cosmo_batch, u, v])
+
+        # 4. Normalize inputs
+        norm_in = (raw_in - self.scalers["in_mean"]) / self.scalers["in_std"]
+
+        # 5. Batch Prediction
+        t_in = torch.tensor(norm_in, dtype=torch.float32).to(self.device)
+        with torch.no_grad():
+            norm_out = self.model(t_in).cpu().numpy()
+
+        # 6. Denormalize outputs
+        pred_out = (norm_out * self.scalers["tgt_std"]) + self.scalers["tgt_mean"]
+
+        # 7. Fill the symmetric output matrix
+        beta_matrix = np.zeros((N_M, N_M, len(self.r_bins)))
+        beta_matrix[idx_i, idx_j] = pred_out
+        beta_matrix[idx_j, idx_i] = pred_out
+
+        return self.r_bins, beta_matrix
+
     def compare_model_prediction(self, imodel, label="Test", save_plot=True):
         if self.model is None:
             raise ValueError("Model not loaded.")

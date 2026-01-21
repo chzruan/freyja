@@ -140,3 +140,11 @@ Traceback (most recent call last):
   File "/cosma/apps/durham/dc-ruan1/micromamba/envs/cosemu/lib/python3.14/site-packages/jax_plugins/xla_cuda12/__init__.py", line 205, in _version_check
     raise RuntimeError(err_msg) from e
 RuntimeError: Unable to load cuBLAS. Is it installed?
+/cosma/home/durham/dc-ruan1/.local/lib/python3.14/site-packages/mcfit/mcfit.py:130: UserWarning: use backend='jax' if desired
+  warnings.warn("use backend='jax' if desired")
+/cosma/home/durham/dc-ruan1/.local/lib/python3.14/site-packages/mcfit/mcfit.py:130: UserWarning: use backend='jax' if desired
+  warnings.warn("use backend='jax' if desired")
+/cosma/home/durham/dc-ruan1/.local/lib/python3.14/site-packages/mcfit/mcfit.py:130: UserWarning: use backend='jax' if desired
+  warnings.warn("use backend='jax' if desired")
+/cosma/home/durham/dc-ruan1/.local/lib/python3.14/site-packages/mcfit/mcfit.py:130: UserWarning: use backend='jax' if desired
+  warnings.warn("use backend='jax' if desired")
