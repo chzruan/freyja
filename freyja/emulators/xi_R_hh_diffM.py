@@ -200,7 +200,7 @@ class HaloBetaEmulator:
         self.model.to(self.device)
         self.model.eval()
 
-    def predict(self, cosmo_params, u, v):
+    def _predict_uvinput(self, cosmo_params, u, v):
         if self.model is None:
             raise ValueError("Model not loaded")
 
@@ -216,7 +216,7 @@ class HaloBetaEmulator:
             (norm_out * self.scalers["tgt_std"]) + self.scalers["tgt_mean"],
         )
 
-    def predict_matrix(self, cosmo_params, logM_bins):
+    def predict(self, cosmo_params, logM_bins):
         """
         Fast evaluation of the emulator for a 2D grid of mass bins.
 
@@ -230,9 +230,8 @@ class HaloBetaEmulator:
         Returns
         -------
         tuple[np.ndarray, np.ndarray]
-            - r_bins: The radial bins associated with the predictions.
-            - beta_matrix: 3D array of shape (N_M, N_M, N_r_bins) containing the
-              predicted beta values. The matrix is symmetric in the first two dimensions.
+            - r_bins: Shape (N_r_bins). The radial bins associated with the predictions.
+            - beta_matrix: 3D array of shape (N_M, N_M, N_r_bins) containing the predicted beta values beta(r | logM, logM). The matrix is symmetric in the first two dimensions.
         """
         if self.model is None:
             raise ValueError("Model not loaded")
@@ -307,7 +306,7 @@ class HaloBetaEmulator:
             for j in range(i, N_M):
                 u = (logM_cut[i] + logM_cut[j]) / 2.0
                 v = (logM_cut[i] - logM_cut[j]) / 2.0
-                _, pred = self.predict(cosmo, u, v)
+                _, pred = self._predict_uvinput(cosmo, u, v)
                 beta_pred[i, j, :] = pred
                 beta_pred[j, i, :] = pred
 

@@ -2,12 +2,6 @@
   <img src="doc/freyja.jpg" alt="freyja Logo" width="250">
 </p>
 
-<h1 align="center">freyja</h1>
-
-<p align="center">
-  <strong>A Python library for the halo streaming model analysis in cosmology</strong>
-</p>
-
 # Freyja MCMC Analysis Package
 
 This package contains tools to perform a cosmological MCMC analysis using machine learning emulators for correlation functions ($\xi_0, \xi_2$) and the halo mass function (HMF).
