@@ -220,7 +220,7 @@ class HaloBiasEmulator:
         print(f"Final Loss: {loss_val:.4f}")
         print(f"Optimized Params: {self.params}")
 
-    def predict(self, cosmo_params, u, v):
+    def predict_uv(self, cosmo_params, u, v):
         """
         Predict Bias for a specific configuration.
         """
@@ -326,6 +326,88 @@ class HaloBiasEmulator:
         err_matrix[idx_j, idx_i] = bias_std_flat
 
         return bias_matrix, err_matrix
+
+    def predict(self, cosmo_params, logM_bins):
+        """
+        Predicts bias matrix, using power-law extrapolation for masses beyond the training limit.
+
+        The GP emulator is strictly valid for log10(M) <= 13.8. For masses larger than this,
+        this method fits a power law b(M) = A * M^alpha to the GP predictions near the cutoff
+        and extrapolates.
+
+        Parameters
+        ----------
+        cosmo_params : np.ndarray
+            1D array of cosmological parameters.
+        logM_bins : np.ndarray
+            1D array of logarithmic halo-mass bin centers.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            - bias_matrix: 2D array of shape (N_M, N_M) containing the predicted bias (stitched).
+            - error_matrix: 2D array of shape (N_M, N_M) (extrapolated regions have 0 error currently).
+        """
+        # 1. Identify Valid vs Extrapolation Regions
+        logM_cut = self.hp.get("logM_cut_max", 13.8)
+        mask_valid = logM_bins <= logM_cut
+
+        # Case A: Entire requested range is within GP limits
+        if np.all(mask_valid):
+            return self.predict_matrix(cosmo_params, logM_bins)
+
+        # Case B: Extrapolation needed
+        # 2. Predict for the Valid Region (logM <= 13.8)
+        logM_valid = logM_bins[mask_valid]
+        if len(logM_valid) == 0:
+            raise ValueError(
+                "All requested mass bins are outside the emulator valid range (< 13.8)."
+            )
+
+        bias_valid, err_valid = self.predict_matrix(cosmo_params, logM_valid)
+
+        # 3. Extract effective bias vector b(M) from the diagonal
+        # We assume B_ii = b(M_i)^2 approx, so b(M_i) = sqrt(B_ii)
+        b_eff_valid = np.sqrt(np.diag(bias_valid))
+
+        # 4. Fit Power Law: b(M) = A * M^alpha  => log10(b) = C + alpha * log10(M)
+        # We fit to the upper end of the valid range (e.g., > 13.0) to capture the relevant slope
+        # for extrapolation, avoiding low-mass turnover features.
+        mask_fit = logM_valid >= 13.0
+        # Fallback: if not enough points > 13.0, use everything > 12.4
+        if np.sum(mask_fit) < 3:
+            mask_fit = logM_valid >= 12.4
+
+        x_fit = logM_valid[mask_fit]  # log10(M)
+        y_fit = np.log10(b_eff_valid[mask_fit])  # log10(b)
+
+        slope, intercept = np.polyfit(x_fit, y_fit, 1)
+
+        # 5. Extrapolate to high masses
+        logM_extrap = logM_bins[~mask_valid]
+        log_b_extrap = slope * logM_extrap + intercept
+        b_eff_extrap = 10**log_b_extrap
+
+        # 6. Construct the Full Bias Vector b(M) for all bins
+        b_full = np.zeros_like(logM_bins)
+        b_full[mask_valid] = b_eff_valid
+        b_full[~mask_valid] = b_eff_extrap
+
+        # 7. Construct Full Matrix using Factorizable Approximation B_ij = b_i * b_j
+        bias_matrix_full = np.outer(b_full, b_full)
+
+        # 8. Stitch: Paste the precise GP prediction back into the valid sub-block
+        # This preserves the specific GP structure (off-diagonal terms) for M < 13.8
+        n_valid = len(logM_valid)
+        bias_matrix_full[:n_valid, :n_valid] = bias_valid
+
+        # 9. Handle Errors
+        # We retain valid GP errors for the sub-block.
+        # For extrapolated regions, we set error to 0 (or could use infinity/NaN) to indicate no data constraint.
+        err_matrix_full = np.zeros_like(bias_matrix_full)
+        err_matrix_full[:n_valid, :n_valid] = err_valid
+
+        return bias_matrix_full, err_matrix_full
 
     def save(self, path):
         """Saves the GP state."""
@@ -455,7 +537,7 @@ class HaloBiasEmulator:
                 v = (logM_cut[i] - logM_cut[j]) / 2.0
 
                 # Predict
-                mu, std = self.predict(cosmo, u, v)
+                mu, std = self.predict_uv(cosmo, u, v)
 
                 # Fill symmetric matrix
                 bias_pred[i, j] = mu
