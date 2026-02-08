@@ -10,9 +10,10 @@ Configuration and Hyperparameters for the Halo Beta Emulator.
 HP = {
     # Data Constraints
     "logM_cut_max": 14.0,  # Maximum log mass
-    "r_cut_max": 30.0,  # Maximum scale in Mpc/h
+    "logM_cut_min": 12.4,  # Minimum log mass
+    "r_cut_max": 35.0,  # Maximum scale in Mpc/h
     "r_cut_min": 0.5,  # Minimum scale
-    "n_models": 59,  # Number of simulation models available
+    "n_models": 55,  # Number of simulation models available
     # Neural Network Architecture
     "batch_size": 128,  # Larger batch size stabilizes gradients
     "learning_rate": 1e-3,  # Initial LR

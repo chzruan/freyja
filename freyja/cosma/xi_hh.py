@@ -129,3 +129,127 @@ def load_ximm_data(
         k_input=k_masked, P_input=P_mean, r_output=r_output, smooth_xi=False
     )
     return xi_mm
+
+
+def load_xihh_fiducial_data(gravity="GR", redshift=0.25, N_boxes=int(100)):
+    """
+    Loads xi_hh (halo-halo autocorrelation) and r_bins for the fiducial Planck cosmology.
+
+    Returns:
+        r_all (np.ndarray): Radial bins.
+        logM_bins (np.ndarray): Mass bins.
+        xi_hh (np.ndarray): Correlation function, shape (N_M, N_M, N_r).
+        xi_sem (np.ndarray): Standard error of the mean, shape (N_M, N_M, N_r).
+    """
+    file_path = Path(
+        f"/cosma8/data/dp203/dc-ruan1/DESI_MGx100/data/xiR_hh-diffM_{gravity}_z{redshift:.2f}.hdf5"
+    )
+
+    if not file_path.exists():
+        raise FileNotFoundError(f"Data file not found: {file_path}")
+
+    with h5py.File(file_path, "r") as f:
+        r_bins = f["r_bincentres"][:]
+        logM_bins = f["log10M_bincentres"][:]
+
+        _lst = []
+        for ibox in range(1, N_boxes + 1):
+            _lst.append(f[f"box{ibox}/xiR_hh_diffM"][...])
+        xi_all_boxes = np.array(_lst)  # Shape (N_boxes, N_M, N_M, N_r)
+        N_M = len(logM_bins)
+        N_r = len(r_bins)
+        xi_hh_mean = np.mean(xi_all_boxes, axis=0)
+        xi_hh_sem = np.std(xi_all_boxes, axis=0) / np.sqrt(N_boxes)
+
+    return r_bins, logM_bins, xi_hh_mean, xi_hh_sem
+
+
+def load_pkmm_fiducial_data(
+    gravity="GR",
+    redshift=0.25,
+    snapnum=137,
+    N_boxes=int(100),
+    return_mean=True,
+    k_max=12.0,
+):
+    """
+    Loads Matter Power Spectrum (P(k))
+    if return_mean is True, computes mean P(k), else returns list of P(k) arrays.
+
+    returns:
+        k (np.ndarray): Wavenumber array.
+        P_mean (np.ndarray) or list of P(k) arrays.
+    """
+    pk_collection = []
+    for ibox in range(1, N_boxes + 1):
+        file_path = (
+            Path(f"/cosma8/data/dp203/dc-ruan1/DESI_MGx100/data/{gravity}/")
+            / f"Run{ibox}"
+            / f"PowerDM.log.{str(snapnum).zfill(4)}.{str(ibox).zfill(4)}.dat"
+        )
+
+        if not file_path.exists():
+            print(f"Warning: Power spectrum file missing: {file_path}")
+            continue
+
+        k, P = np.loadtxt(
+            file_path,
+            unpack=True,
+            skiprows=3,
+            usecols=(1, 3),
+        )
+        # Filter high-k noise if necessary
+        mask = k < k_max
+        pk_collection.append(P[mask])
+        k_masked = k[mask]
+
+    if not pk_collection:
+        raise FileNotFoundError(f"No PowerDM files found for snapnum {snapnum}")
+
+    if not return_mean:
+        return k_masked, pk_collection
+    else:
+        P_mean = np.mean(pk_collection, axis=0)
+        return k_masked, P_mean
+
+
+def load_ximm_fiducial_data(
+    r_output, gravity="GR", redshift=0.25, snapnum=137, N_boxes=int(100)
+):
+    """
+    Loads Matter Power Spectrum (P(k)), computes mean P(k),
+    and converts to Correlation Function xi_mm using Hankel transform.
+    """
+    pk_collection = []
+    for ibox in range(1, N_boxes + 1):
+        file_path = (
+            Path(f"/cosma8/data/dp203/dc-ruan1/DESI_MGx100/data/{gravity}/")
+            / f"Run{ibox}"
+            / f"PowerDM.log.{str(snapnum).zfill(4)}.{str(ibox).zfill(4)}.dat"
+        )
+
+        if not file_path.exists():
+            print(f"Warning: Power spectrum file missing: {file_path}")
+            continue
+
+        k, P = np.loadtxt(
+            file_path,
+            unpack=True,
+            skiprows=3,
+            usecols=(1, 3),
+        )
+        # Filter high-k noise if necessary
+        mask = k < 12.0
+        pk_collection.append(P[mask])
+        k_masked = k[mask]
+
+    if not pk_collection:
+        raise FileNotFoundError(f"No PowerDM files found for snapnum {snapnum}")
+
+    P_mean = np.mean(pk_collection, axis=0)
+
+    # Compute xi_mm from P_mean
+    xi_mm = compute_xi_from_Pk(
+        k_input=k_masked, P_input=P_mean, r_output=r_output, smooth_xi=False
+    )
+    return xi_mm
