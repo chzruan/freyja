@@ -18,7 +18,7 @@ from .xi_R_hh_diffM_network import HP as HyperParamsDefault
 from .utils_plotting import plot_validation_results
 
 # Import the Scalar Bias Emulator for normalization
-from .halo_bias_diffM import HaloBiasEmulator
+from .halo_linear_bias import HaloLinearBiasEmulator
 
 MODULE_DIR = Path(__file__).parent
 
@@ -246,12 +246,12 @@ class HaloBetaEmulator:
         print(f"Emulator saved to {path}")
 
     def load_bias_emulator(self, path):
-        """Loads the scalar HaloBiasEmulator used for high-mass extrapolation."""
+        """Loads the scalar HaloLinearBiasEmulator used for high-mass extrapolation."""
         try:
-            self.bias_emu = HaloBiasEmulator(saved_path=path)
-            print(f"Loaded auxiliary HaloBiasEmulator from {path}")
+            self.bias_emu = HaloLinearBiasEmulator(saved_path=path)
+            print(f"Loaded auxiliary HaloLinearBiasEmulator from {path}")
         except Exception as e:
-            print(f"Warning: Failed to load HaloBiasEmulator: {e}")
+            print(f"Warning: Failed to load HaloLinearBiasEmulator: {e}")
 
     def load(self, path):
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
@@ -301,7 +301,7 @@ class HaloBetaEmulator:
         at the high-mass end for robust amplitude extrapolation.
         """
         if self.bias_emu is None:
-            raise RuntimeError("HaloBiasEmulator not loaded. Cannot extrapolate.")
+            raise RuntimeError("HaloLinearBiasEmulator not loaded. Cannot extrapolate.")
 
         # Sample bias near the edge of the training set
         logM_sample = np.linspace(
@@ -375,7 +375,7 @@ class HaloBetaEmulator:
             logM1 > self.logM_limit or logM2 > self.logM_limit
         ):
             print(
-                "Warning: Extrapolation requested but HaloBiasEmulator not loaded. Clamping inputs."
+                "Warning: Extrapolation requested but HaloLinearBiasEmulator not loaded. Clamping inputs."
             )
             # Fallback: Clamp and predict without renormalization (inaccurate amplitude)
             return self.predict(

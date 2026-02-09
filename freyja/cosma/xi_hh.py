@@ -87,6 +87,78 @@ def load_xihh_data(imodel, gravity=GRAVITY, dataflag=DATAFLAG, redshift=REDSHIFT
     return r_all, logM_bins, xi_hh, xi_sem
 
 
+def load_pkmm_data(
+    imodel=1,
+    gravity=GRAVITY,
+    dataflag=DATAFLAG,
+    snapnum=SNAPNUM,
+    k_max=12.0,
+    return_mean=True,
+):
+    """
+    Loads Matter Power Spectrum (P(k)) for a given model (imodel = 1..64), computes mean P(k) across boxes, and returns k and P_mean arrays.
+    If return_mean is False, returns list of P(k) arrays for each box instead of the mean.
+    """
+
+    pk_collection = []
+    for ibox in range(1, 6):
+        file_path = (
+            Path("/cosma8/data/dp203/dc-ruan1/mg_glam/")
+            / f"DurMun_hmfemu_{gravity}_{dataflag}_model{imodel}_L1024Np2048Ng4096"
+            / f"Run{ibox}"
+            / f"PowerDM.log.{str(snapnum).zfill(4)}.{str(ibox).zfill(4)}.dat"
+        )
+
+        if not file_path.exists():
+            print(f"Warning: Power spectrum file missing: {file_path}")
+            continue
+
+        k, P = np.loadtxt(
+            file_path,
+            unpack=True,
+            skiprows=3,
+            usecols=(1, 3),
+        )
+        # Filter high-k noise if necessary
+        mask = k < k_max
+        pk_collection.append(P[mask])
+        k_masked = k[mask]
+
+    if not pk_collection:
+        raise FileNotFoundError(f"No PowerDM files found for model {imodel}")
+    if not return_mean:
+        return k_masked, np.array(pk_collection)
+    else:
+        P_mean = np.mean(pk_collection, axis=0)
+        return k_masked, P_mean
+
+
+def load_linear_pkmm_data(
+    imodel=1,
+    gravity=GRAVITY,
+    dataflag=DATAFLAG,
+    k_max=12.0,
+):
+    """
+    Loads Linear Matter Power Spectrum (P(k)) for a given model (imodel = 1..64), calculated from CAMB and used in generating the initial conditions of the simulations.
+    """
+
+    file_path = Path(
+        f"/cosma8/data/dp203/dc-ruan1/mg_glam/DurMun_hmfemu_{gravity}_{dataflag}_model{imodel}_L1024Np2048Ng4096/PkTable.dat"
+    )  # This file contains the linear P(k) used for initial conditions, calculated at z_init=100 and linearly extrapolated to redshift zero.
+    k, P = np.loadtxt(
+        file_path,
+        unpack=True,
+        skiprows=5,
+    )
+    # Filter high-k noise if necessary
+    mask = k < k_max
+    P = P[mask]
+    k_masked = k[mask]
+
+    return k_masked, P
+
+
 def load_ximm_data(
     r_output, imodel=1, gravity=GRAVITY, dataflag=DATAFLAG, snapnum=SNAPNUM
 ):
@@ -176,9 +248,12 @@ def load_pkmm_fiducial_data(
     Loads Matter Power Spectrum (P(k))
     if return_mean is True, computes mean P(k), else returns list of P(k) arrays.
 
-    returns:
+    returns (return_mean=True):
         k (np.ndarray): Wavenumber array.
-        P_mean (np.ndarray) or list of P(k) arrays.
+        P_mean (np.ndarray): Mean power spectrum.
+    returns (return_mean=False):
+        k (np.ndarray): Wavenumber array.
+        pk_collection (list of np.ndarray): List of P(k) arrays for each box.
     """
     pk_collection = []
     for ibox in range(1, N_boxes + 1):
