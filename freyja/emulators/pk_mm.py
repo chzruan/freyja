@@ -75,11 +75,6 @@ class MatterAlphaEmulator:
         """
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.checkpoint_path = checkpoint_path
-        try:
-            self.load(checkpoint_path)
-        except Exception as e:
-            print(f"Failed to load emulator from {checkpoint_path}: {e}")
         self.hp = hp or {
             "hidden_layers": [64, 64],
             "activation": "GELU",
@@ -94,13 +89,17 @@ class MatterAlphaEmulator:
             "k_max": 15.0,
             "n_k_bins": 100,
         }
-        self.model = None
         self.scalers = {}
         self.k_grid = np.logspace(
             np.log10(self.hp["k_min"]), np.log10(self.hp["k_max"]), self.hp["n_k_bins"]
         )
         # Setup CAMB parameters for linear P(k) computation
         self.camb_params = camb.CAMBparams()
+        self.checkpoint_path = checkpoint_path
+        try:
+            self.load(self.checkpoint_path)
+        except Exception as e:
+            print(f"Failed to load emulator from {self.checkpoint_path}: {e}")
 
     def get_pk_linear_sigma8(
         self,
@@ -144,7 +143,23 @@ class MatterAlphaEmulator:
         pk_final = pk_fid * rescaling_factor
         return kh, pk_final[0], new_As
 
-    def load_linear_pkmm_data(self, imodel):
+    def get_linear_pk_mm(self, cosmo_params):
+        Om0, h, S8, ns = cosmo_params
+        sigma8 = S8 / np.sqrt(Om0 / 0.3)
+        omega_b_h2 = 0.0224
+        omega_c_h2 = Om0 * h**2 - omega_b_h2
+        k_Lin, P_Lin, final_As = self.get_pk_linear_sigma8(
+            sigma8_target=sigma8,
+            h=h,
+            ombh2=omega_b_h2,
+            omch2=omega_c_h2,
+            ns=ns,
+            kmax=20.0,
+            npoints=2000,
+        )
+        return k_Lin, P_Lin
+
+    def get_linear_pk_mm_forimodel(self, imodel):
         cosmo = load_cosmology_wrapper(imodel)
         Om0, h, S8, ns = cosmo
         sigma8 = S8 / np.sqrt(Om0 / 0.3)
@@ -167,7 +182,7 @@ class MatterAlphaEmulator:
         for imodel in range(1, self.hp["n_models"] + 1):
             cosmo = load_cosmology_wrapper(imodel)
             k_NL, Pk_NL = load_pkmm_data(imodel, return_mean=True)
-            k_L, Pk_L = self.load_linear_pkmm_data(imodel)
+            k_L, Pk_L = self.get_linear_pk_mm_forimodel(imodel)
 
             # Interpolation to common k-grid
             spl_NL = InterpolatedUnivariateSpline(np.log10(k_NL), np.log10(Pk_NL), k=3)
@@ -315,7 +330,7 @@ class MatterAlphaEmulator:
         # 1. Load Ground Truth Data
         cosmo = load_cosmology_wrapper(imodel)
         k_NL, Pk_NL = load_pkmm_data(imodel, return_mean=True)
-        k_L, Pk_L = self.load_linear_pkmm_data(imodel)
+        k_L, Pk_L = self.get_linear_pk_mm_forimodel(imodel)
 
         # Interpolate truth to the emulator's k_grid
         _kk = np.geomspace(1e-2, 14.0, 100)
@@ -361,6 +376,89 @@ class MatterAlphaEmulator:
 
             plt.tight_layout()
             plt.savefig(f"compare_alpha_model_{imodel}.pdf")
+            plt.close()
+
+        return metrics
+
+
+class MatterPkEmulator(MatterAlphaEmulator):
+    def __init__(
+        self,
+        checkpoint_path=MODULE_DIR / "checkpoints/matter_alpha_z0.25.pt",
+    ):
+        super().__init__(checkpoint_path=checkpoint_path)
+
+    def predict(self, cosmo_params, k_array):
+        """
+        Predict P_nonlinear(k) for a given cosmology and k values.
+
+        Inputs:
+        - cosmo_params: Array of cosmological parameters [Om0, h, S8, ns]
+        - k_array: Array of k values to predict P(k) at
+        """
+        alpha_pred = super().predict(cosmo_params, k_array).flatten()
+
+        # Get linear P(k) for the same cosmology
+        k_Lin, P_Lin = self.get_linear_pk_mm(cosmo_params)
+
+        # Interpolate linear P(k) to the desired k_array
+        spl_L = InterpolatedUnivariateSpline(np.log10(k_Lin), np.log10(P_Lin), k=3)
+        P_L_interp = 10 ** spl_L(np.log10(k_array))
+
+        return alpha_pred * P_L_interp
+
+    def compare(self, imodel, save_plot=True):
+        """
+        Compare the emulator prediction with the truth for a specific simulation model.
+        """
+        if self.model is None:
+            raise ValueError("Model not loaded.")
+
+        # 1. Load Ground Truth Data
+        cosmo = load_cosmology_wrapper(imodel)
+        k_NL, Pk_NL = load_pkmm_data(imodel, return_mean=True)
+        mask_k = k_NL <= 12.0
+        k_NL = k_NL[mask_k]
+        Pk_NL = Pk_NL[mask_k]
+
+        # 2. Get Emulator Prediction
+        Pk_pred = self.predict(cosmo, k_NL).flatten()
+
+        # 3. Calculate Metrics
+        mse = np.mean((Pk_pred - Pk_NL) ** 2)
+        mean_frac_error = np.mean(np.abs((Pk_pred - Pk_NL) / Pk_NL))
+
+        metrics = {
+            "mse": mse,
+            "mean_frac_error": mean_frac_error,
+        }
+
+        print(f"--- Evaluation for Model {imodel} ---")
+        print(f"MSE: {mse:.2e}")
+        print(f"Mean Fractional Error: {mean_frac_error*100:.2f}%")
+
+        # 4. Optional Plotting (adapting freyja's plotting style)
+        if save_plot:
+            import matplotlib.pyplot as plt
+
+            fig, ax = plt.subplots(
+                2, 1, sharex=True, figsize=(8, 6), gridspec_kw={"height_ratios": [3, 1]}
+            )
+
+            ax[0].plot(k_NL, k_NL * Pk_NL, "k-", label="Truth (Sim)")
+            ax[0].plot(k_NL, k_NL * Pk_pred, "r--", label="Emulator")
+            ax[0].set_ylabel(r"$k \times P(k)$")
+            ax[0].set_xscale("log")
+            ax[0].legend()
+
+            ax[1].plot(k_NL, (Pk_pred / Pk_NL) - 1, "r-")
+            ax[1].axhline(0, color="k", linestyle=":")
+            ax[1].set_ylabel("Fractional Error")
+            ax[1].set_ylim([-0.11, 0.11])
+            ax[1].set_xlabel(r"$k$ [$h$/Mpc]")
+
+            plt.tight_layout()
+            plt.savefig(f"compare_Pk_mm_model_{imodel}.pdf")
             plt.close()
 
         return metrics

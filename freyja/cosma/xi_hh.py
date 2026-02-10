@@ -23,6 +23,14 @@ def load_cosmology_wrapper(imodel):
     Parameters:
         imodel (int): Model ID (1-64).
     """
+    if imodel == 0:
+        # fiducial Planck-2015 cosmology
+        Om0 = 0.3089
+        h = 0.6774
+        sigma8 = 0.8159
+        S8 = sigma8 * np.sqrt(Om0 / 0.3)
+        ns = 0.9667
+        return np.array([Om0, h, S8, ns])
     cosmo = CosmologyDurMun.from_run(gravity=GRAVITY, dataflag=DATAFLAG, imodel=imodel)
     return np.array([cosmo.Om0, cosmo.h, cosmo.S8, cosmo.ns])
 
@@ -37,6 +45,9 @@ def load_xihh_data(imodel, gravity=GRAVITY, dataflag=DATAFLAG, redshift=REDSHIFT
         xi_hh (np.ndarray): Correlation function, shape (N_M, N_M, N_r).
         xi_sem (np.ndarray): Standard error of the mean, shape (N_M, N_M, N_r).
     """
+    if imodel == 0:
+        # For the fiducial model, we load from a different file that contains the average over 100 boxes.
+        return load_xihh_fiducial_data(gravity=gravity, redshift=redshift, N_boxes=100)
     file_path = (
         Path("/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/data/")
         / f"xiR_hh-diffM_{gravity}_{dataflag}_z{redshift:.2f}_model{imodel}.hdf5"
@@ -99,6 +110,19 @@ def load_pkmm_data(
     Loads Matter Power Spectrum (P(k)) for a given model (imodel = 1..64), computes mean P(k) across boxes, and returns k and P_mean arrays.
     If return_mean is False, returns list of P(k) arrays for each box instead of the mean.
     """
+
+    if imodel == 0:
+        # For the fiducial model, we load from a different set of files that contain the average over 100 boxes.
+        if gravity == "LCDM":
+            gravity = "GR"
+        return load_pkmm_fiducial_data(
+            gravity=gravity,
+            redshift=REDSHIFT,
+            snapnum=snapnum,
+            N_boxes=100,
+            return_mean=return_mean,
+            k_max=k_max,
+        )
 
     pk_collection = []
     for ibox in range(1, 6):
