@@ -266,26 +266,57 @@ class MatterAlphaEmulator:
         self.save()
 
     def predict(self, cosmo_params, k_array):
-        """Predict alpha(k) for a given cosmology and k values."""
+        """
+        Predict alpha(k) for a given cosmology and k values.
+        Includes a physics-inspired modification for a smooth transition to
+        an asymptotic value in the linear regime (low k).
+        """
         self.model.eval()
         k_array = np.atleast_1d(k_array)
 
-        # Prepare Input: Tile cosmology and stack with log10(k)
-        cosmo_tile = np.tile(cosmo_params, (len(k_array), 1))
-        # Ensure k_array is (N, 1) for stacking
-        raw_in = np.column_stack([cosmo_tile, np.log10(k_array)])
+        # --- Physics-inspired modification for smooth low-k transition ---
 
+        # 1. Define k-range to find the asymptotic value
+        k_asymp_range = np.linspace(0.03, 0.06, 10)
+
+        # 2. Define the pivot and width for the smooth transition
+        k_pivot = 0.06
+        transition_width = 0.02
+
+        # 3. Combine all k's needed for prediction to be efficient
+        k_to_predict = np.union1d(k_array, k_asymp_range)
+
+        # --- NN prediction part ---
+        cosmo_tile = np.tile(cosmo_params, (len(k_to_predict), 1))
+        raw_in = np.column_stack([cosmo_tile, np.log10(k_to_predict)])
         norm_in = (raw_in - self.scalers["in_mean"]) / self.scalers["in_std"]
         t_in = torch.tensor(norm_in, dtype=torch.float32).to(self.device)
-
         with torch.no_grad():
             norm_out = self.model(t_in).cpu().numpy()
+        pred_all = (
+            (norm_out * self.scalers["tgt_std"]) + self.scalers["tgt_mean"]
+        ).flatten()
+        k_pred_map = dict(zip(k_to_predict, pred_all))
+        # --- End of NN prediction part ---
 
-        # Denormalize
-        pred = (norm_out * self.scalers["tgt_std"]) + self.scalers["tgt_mean"]
+        # 4. Get predictions for the user's k_array
+        alpha_pred = np.array([k_pred_map[k] for k in k_array])
 
-        # Flatten to (N,) to match input shape
-        return pred.flatten()
+        # 5. Calculate the asymptotic value from the low-k range
+        alpha_asymp_values = np.array([k_pred_map[k] for k in k_asymp_range])
+        alpha_asymptotic = np.mean(alpha_asymp_values)
+
+        # 6. Apply the smooth transition using a sigmoid function
+        def sigmoid(x):
+            return 1 / (1 + np.exp(-x))
+
+        # Weighting function w(k) goes from 0 (asymptotic) to 1 (emulator)
+        w = sigmoid((k_array - k_pivot) / transition_width)
+
+        # Combine the asymptotic value and the emulator prediction
+        alpha_final = w * alpha_pred + (1 - w) * alpha_asymptotic
+
+        return alpha_final.flatten()
 
     def save(self):
         state = {
@@ -343,10 +374,16 @@ class MatterAlphaEmulator:
             import matplotlib.pyplot as plt
 
             fig, ax = plt.subplots(
-                2, 1, sharex=True, figsize=(8, 6), gridspec_kw={"height_ratios": [3, 1]}
+                2,
+                1,
+                sharex=True,
+                figsize=(8, 6),
+                gridspec_kw={"height_ratios": [3, 1]},
             )
-            ax[0].plot(_kk, alpha_true, "k-", label="Truth")
-            ax[0].plot(_kk, alpha_pred, "r--", label="Emulator")
+            ax[0].plot(
+                _kk, alpha_true, "k", marker=".", markersize=4, lw=0, label="Truth"
+            )
+            ax[0].plot(_kk, alpha_pred, "r-", label="Emulator")
             ax[0].set_ylabel(r"$\alpha(k)$")
             ax[0].set_xscale("log")
             ax[0].legend()
@@ -354,7 +391,7 @@ class MatterAlphaEmulator:
             ax[1].axhline(0, color="k", linestyle=":")
             ax[1].set_ylabel("Frac. Err")
             ax[1].set_ylim([-0.11, 0.11])
-
+            ax[1].set_xlabel(r"$k$ [$h$ Mpc$^{-1}$]")
             plt.tight_layout()
             plt.savefig(f"compare_alpha_model_{imodel}.pdf")
             plt.close()
@@ -420,6 +457,7 @@ class MatterPkEmulator(MatterAlphaEmulator):
             ax[1].axhline(0, color="k", linestyle=":")
             ax[1].set_ylabel("Frac. Err")
             ax[1].set_ylim([-0.11, 0.11])
+            ax[1].set_xlabel(r"$k$ [$h$ Mpc$^{-1}$]")
 
             plt.tight_layout()
             plt.savefig(f"compare_Pk_mm_model_{imodel}.pdf")
