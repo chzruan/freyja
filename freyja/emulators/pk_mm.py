@@ -1,113 +1,92 @@
+from __future__ import annotations
+
+import jax
+import jax.numpy as jnp
 import numpy as np
-import torch
-import torch.nn as nn
-import pytorch_lightning as pl
+from tinygp import GaussianProcess, kernels
+from tinygp.helpers import dataclass
 from pathlib import Path
-from torch.utils.data import DataLoader, TensorDataset, random_split
-from pytorch_lightning.callbacks import (
-    EarlyStopping,
-    LearningRateMonitor,
-    ModelCheckpoint,
-)
+import optax
+from typing import Tuple, Optional, Dict, Any
 from scipy.interpolate import InterpolatedUnivariateSpline
 
-# Local imports
 from ..cosma.xi_hh import load_cosmology_wrapper, load_pkmm_data
 
 MODULE_DIR = Path(__file__).parent
 
 
-class MatterAlphaNet(pl.LightningModule):
+# --- GP Utilities ---
+HP = {
+    "redshift": 0.25,
+    "n_models": 59,
+    "k_min": 0.008,
+    "k_max": 20.0,
+    "n_k_bins": 50,
+    "loss_epsilon": 1e-6,
+}
+
+
+@dataclass
+class RBFKernel(kernels.Kernel):
     """
-    Neural Network for predicting the non-linear boost ratio:
-    alpha(k) = P_NL(k) / P_Lin(k)
+    Radial Basis Function (RBF) kernel with anisotropic length-scales.
     """
 
-    def __init__(self, input_dim, output_dim, scalers, hp):
-        super().__init__()
-        self.save_hyperparameters(hp)
-        self.scalers = scalers
+    log_amp: jnp.ndarray
+    log_scale: jnp.ndarray
 
-        layers = []
-        in_dim = input_dim
-        for h_dim in self.hparams["hidden_layers"]:
-            layers.append(nn.Linear(in_dim, h_dim))
-            # Dynamic activation selection
-            act = (
-                nn.GELU()
-                if self.hparams.get("activation", "GELU") == "GELU"
-                else nn.ReLU()
-            )
-            layers.append(act)
-            layers.append(nn.Dropout(self.hparams["dropout"]))
-            in_dim = h_dim
+    def evaluate(self, X1: jnp.ndarray, X2: jnp.ndarray) -> jnp.ndarray:
+        amp = jnp.exp(self.log_amp)
+        ell = jnp.exp(self.log_scale)
+        r = (X1 - X2) / ell
+        r2 = jnp.dot(r, r)
+        return amp * jnp.exp(-0.5 * r2)
 
-        layers.append(nn.Linear(in_dim, output_dim))
-        self.net = nn.Sequential(*layers)
+    def evaluate_diag(self, X: jnp.ndarray) -> jnp.ndarray:
+        """Return the diagonal of the kernel matrix."""
+        return jnp.exp(self.log_amp)
 
-    def forward(self, x):
-        return self.net(x)
 
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        y_pred = self(x)
-        loss = torch.nn.functional.mse_loss(y_pred, y)
-        self.log("train_loss", loss, prog_bar=True)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        x, y = batch
-        y_pred = self(x)
-        mse = torch.nn.functional.mse_loss(y_pred, y)
-        self.log("val_mse", mse, prog_bar=True)
-        return mse
-
-    def configure_optimizers(self):
-        return torch.optim.AdamW(
-            self.parameters(),
-            lr=self.hparams["learning_rate"],
-            weight_decay=self.hparams["weight_decay"],
-        )
+def build_gp(params, X, diag_noise):
+    """Construct a tinygp Gaussian Process object with heteroscedastic noise."""
+    kernel = RBFKernel(
+        log_amp=params["log_amp"],
+        log_scale=params["log_scale"],
+    )
+    return GaussianProcess(kernel, X, diag=diag_noise)
 
 
 class MatterAlphaEmulator:
+    """
+    Gaussian Process Emulator for the matter power spectrum boost factor alpha(k).
+
+    This class emulates the ratio alpha(k) = P_NL(k) / P_L(k).
+    """
+
     def __init__(
-        self, checkpoint_path=MODULE_DIR / "checkpoints/matter_alpha_z0.25.pt", hp=None
+        self,
+        saved_path=MODULE_DIR / "checkpoints" / "matter_alpha_gp_z0.25.npz",
+        hp=HP,
     ):
-        """
-        Emulator for the ratio alpha(k) = P_nonlinear(k) / P_linear(k).
-        """
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.hp = hp
+        self.redshift = hp.get("redshift", 0.25)
+        self.params = None
+        self.X_train = None
+        self.Y_train = None
+        self.Y_err_train = None  # Placeholder, not used for now
 
-        self.hp = hp or {
-            "hidden_layers": [64, 64],
-            "activation": "GELU",
-            "dropout": 0.00,
-            "learning_rate": 1e-3,
-            "weight_decay": 1e-4,
-            "batch_size": 128,
-            "max_epochs": 3000,
-            "patience": 100,
-            "n_models": 55,
-            "k_min": 0.005,
-            "k_max": 15.0,
-            "n_k_bins": 100,
-        }
+        self.x_mean = None
+        self.x_std = None
+        self.y_mean = None
+        self.y_std = None
 
-        self.scalers = {}
         self.k_grid = np.logspace(
             np.log10(self.hp["k_min"]), np.log10(self.hp["k_max"]), self.hp["n_k_bins"]
         )
-        self.checkpoint_path = Path(checkpoint_path)
 
-        # Attempt load if exists
-        if self.checkpoint_path.exists():
-            try:
-                self.load(self.checkpoint_path)
-            except Exception as e:
-                print(
-                    f"Warning: Failed to load emulator from {self.checkpoint_path}: {e}"
-                )
+        if saved_path is not None:
+            if Path(saved_path).exists():
+                self.load(saved_path)
 
     def get_pk_linear_sigma8(
         self,
@@ -118,28 +97,28 @@ class MatterAlphaEmulator:
         ns=0.965,
         kmax=10.0,
         npoints=2000,
+        redshift=0.0,
     ):
         """
         Calculates linear Matter P(k) normalized to a specific sigma8 using CAMB.
-        Note: Contains lazy imports to speed up module loading.
         """
-        # LAZY IMPORT
         import camb
         from camb import model
 
-        # 1. Setup CAMB with a dummy As (amplitude)
         dummy_As = 2e-9
         pars = camb.CAMBparams()
         pars.set_cosmology(H0=h * 100, ombh2=ombh2, omch2=omch2)
         pars.InitPower.set_params(ns=ns, As=dummy_As)
-        pars.set_matter_power(redshifts=[0.0], kmax=kmax)
+
+        # Ensure z=0 is calculated for sigma8_0 normalization
+        eval_redshifts = sorted(list({redshift, 0.0}))
+        pars.set_matter_power(redshifts=eval_redshifts, kmax=kmax)
+
         pars.NonLinear = model.NonLinear_none
 
-        # 2. Run CAMB once to get the "fiducial" sigma8
         results = camb.get_results(pars)
         sigma8_fid = results.get_sigma8_0()
 
-        # 3. Calculate the rescaling factor (P(k) ~ As ~ sigma8^2)
         rescaling_factor = (sigma8_target / sigma8_fid) ** 2
         new_As = dummy_As * rescaling_factor
 
@@ -148,7 +127,10 @@ class MatterAlphaEmulator:
         )
         pk_final = pk_fid * rescaling_factor
 
-        return kh, pk_final[0], new_As
+        # Select P(k) at the requested redshift
+        z_index = np.where(np.isclose(z, redshift))[0][0]
+
+        return kh, pk_final[z_index], new_As
 
     def get_linear_pk_mm(self, cosmo_params):
         Om0, h, S8, ns = cosmo_params
@@ -163,7 +145,8 @@ class MatterAlphaEmulator:
             omch2=omega_c_h2,
             ns=ns,
             kmax=20.0,
-            npoints=2000,
+            npoints=1024,
+            redshift=self.redshift,
         )
         return k_Lin, P_Lin
 
@@ -172,196 +155,186 @@ class MatterAlphaEmulator:
         Vectorized data preparation.
         """
         all_inputs, all_targets = [], []
-
-        # Pre-compute log10(k) column vector
-        # Shape: (n_bins, 1)
         log_k_vec = np.log10(self.k_grid)[:, None]
         n_bins = len(self.k_grid)
 
         for imodel in range(1, self.hp["n_models"] + 1):
-            # 1. Load Data
             cosmo = load_cosmology_wrapper(imodel)
             k_NL, Pk_NL = load_pkmm_data(imodel, return_mean=True)
             k_L, Pk_L = self.get_linear_pk_mm(cosmo)
 
-            # 2. Interpolate to common k-grid
-            # We interpolate in log-log space for stability
             spl_NL = InterpolatedUnivariateSpline(np.log10(k_NL), np.log10(Pk_NL), k=3)
             spl_L = InterpolatedUnivariateSpline(np.log10(k_L), np.log10(Pk_L), k=3)
 
-            # Calculate ratio: alpha = P_NL / P_L
             log_ratio = spl_NL(np.log10(self.k_grid)) - spl_L(np.log10(self.k_grid))
             pk_ratio = 10**log_ratio
 
-            # 3. Vectorize Inputs: [Cosmo_Tile, log10(k)]
             cosmo_tiled = np.tile(cosmo, (n_bins, 1))
             model_inputs = np.hstack([cosmo_tiled, log_k_vec])
             all_inputs.append(model_inputs)
-
-            # 4. Vectorize Targets
             all_targets.append(pk_ratio[:, None])
 
-        # Stack all
         inputs = np.vstack(all_inputs)
         targets = np.vstack(all_targets)
 
-        # Scalers
-        self.scalers = {
-            "in_mean": inputs.mean(axis=0),
-            "in_std": inputs.std(axis=0) + 1e-10,
-            "tgt_mean": targets.mean(axis=0),
-            "tgt_std": targets.std(axis=0) + 1e-10,
-        }
+        self.x_mean = np.mean(inputs, axis=0)
+        self.x_std = np.std(inputs, axis=0) + 1e-10
+        self.X_train = jnp.array((inputs - self.x_mean) / self.x_std)
 
-        X = (inputs - self.scalers["in_mean"]) / self.scalers["in_std"]
-        Y = (targets - self.scalers["tgt_mean"]) / self.scalers["tgt_std"]
+        self.y_mean = np.mean(targets)
+        self.y_std = np.std(targets) + 1e-10
+        self.Y_train = jnp.array(((targets - self.y_mean) / self.y_std).flatten())
 
-        return torch.tensor(X, dtype=torch.float32), torch.tensor(
-            Y, dtype=torch.float32
-        )
+        # For now, assume uniform noise
+        self.Y_err_train = jnp.ones_like(self.Y_train) * self.hp["loss_epsilon"]
 
-    def train(self):
-        X, Y = self._prepare_data()
-        dataset = TensorDataset(X, Y)
+    def train(self, learning_rate=0.01, n_steps=500):
+        if self.X_train is None:
+            self._prepare_data()
 
-        n_val = int(0.15 * len(dataset))
-        train_set, val_set = random_split(dataset, [len(dataset) - n_val, n_val])
+        dim = self.X_train.shape[1]
+        self.params = {"log_amp": jnp.zeros(()), "log_scale": jnp.zeros(dim)}
 
-        train_loader = DataLoader(
-            train_set, batch_size=self.hp["batch_size"], shuffle=True, num_workers=4
-        )
-        val_loader = DataLoader(
-            val_set, batch_size=self.hp["batch_size"], num_workers=4
-        )
+        optimizer = optax.adam(learning_rate)
+        opt_state = optimizer.init(self.params)
 
-        self.model = MatterAlphaNet(X.shape[1], Y.shape[1], self.scalers, self.hp)
+        def loss_fn(p):
+            gp = build_gp(p, self.X_train, self.Y_err_train)
+            return -gp.log_probability(self.Y_train)
 
-        callbacks = [
-            ModelCheckpoint(monitor="val_mse", save_top_k=1, mode="min"),
-            EarlyStopping(
-                monitor="val_mse", patience=self.hp.get("patience", 50), mode="min"
-            ),
-            LearningRateMonitor(logging_interval="epoch"),
-        ]
+        @jax.jit
+        def step(params, opt_state):
+            loss_val, grads = jax.value_and_grad(loss_fn)(params)
+            updates, opt_state = optimizer.update(grads, opt_state)
+            new_params = optax.apply_updates(params, updates)
+            return new_params, opt_state, loss_val
 
-        trainer = pl.Trainer(
-            max_epochs=self.hp["max_epochs"],
-            accelerator="auto",
-            devices=1,
-            callbacks=callbacks,
-            enable_progress_bar=True,
-        )
+        print(f"Training GP with Optax (Adam, lr={learning_rate}, steps={n_steps})...")
 
-        trainer.fit(self.model, train_loader, val_loader)
+        for i in range(n_steps):
+            self.params, opt_state, loss_val = step(self.params, opt_state)
+            if i % 100 == 0:
+                print(f"Step {i:4d} | Loss: {loss_val:.4f}")
 
-        print(f"Loading best checkpoint: {trainer.checkpoint_callback.best_model_path}")
-        self.model = MatterAlphaNet.load_from_checkpoint(
-            trainer.checkpoint_callback.best_model_path,
-            input_dim=X.shape[1],
-            output_dim=Y.shape[1],
-            scalers=self.scalers,
-            hp=self.hp,
-        )
-        self.model.to(self.device)
-        self.save()
+        print(f"Final Loss: {loss_val:.4f}")
+        print(f"Optimized Params: {self.params}")
+
+    def _predict_raw(self, cosmo_params, k_array):
+        if self.params is None:
+            raise ValueError("GP not trained or loaded.")
+
+        k_array = np.atleast_1d(k_array)
+        log10k = np.log10(k_array)
+
+        cosmo_tile = np.tile(cosmo_params, (len(log10k), 1))
+        raw_in = np.column_stack([cosmo_tile, log10k])
+        norm_in = (raw_in - self.x_mean) / self.x_std
+        X_test = jnp.array(norm_in)
+
+        gp = build_gp(self.params, self.X_train, self.Y_err_train)
+        cond = gp.condition(self.Y_train, X_test)
+
+        mu_norm = cond.gp.mean
+        var_norm = cond.gp.variance
+
+        alpha_pred = (np.array(mu_norm) * self.y_std) + self.y_mean
+        alpha_std = np.array(jnp.sqrt(var_norm)) * self.y_std
+
+        return alpha_pred, alpha_std
 
     def predict(self, cosmo_params, k_array):
-        """
-        Predict alpha(k) for a given cosmology and k values.
-        Includes a physics-inspired modification for a smooth transition to
-        an asymptotic value in the linear regime (low k).
-        """
-        self.model.eval()
-        k_array = np.atleast_1d(k_array)
+        # Get raw predictions for the input k_array first
+        alpha_pred, alpha_std = self._predict_raw(cosmo_params, k_array)
 
-        # --- Physics-inspired modification for smooth low-k transition ---
+        # Asymptotic value
+        k_asymp_range = np.linspace(0.04, 0.09, 5)
+        alpha_asymp_pred, alpha_asymp_std = self._predict_raw(
+            cosmo_params, k_asymp_range
+        )
+        alpha_asymptotic = np.mean(alpha_asymp_pred)
+        alpha_asymptotic_std = np.mean(alpha_asymp_std)
 
-        # 1. Define k-range to find the asymptotic value
-        k_asymp_range = np.linspace(0.03, 0.06, 10)
+        # Replace low-k values
+        low_k_mask = k_array < 0.09
+        alpha_pred[low_k_mask] = alpha_asymptotic
+        alpha_std[low_k_mask] = alpha_asymptotic_std
 
-        # 2. Define the pivot and width for the smooth transition
-        k_pivot = 0.06
-        transition_width = 0.02
+        return alpha_pred, alpha_std
 
-        # 3. Combine all k's needed for prediction to be efficient
-        k_to_predict = np.union1d(k_array, k_asymp_range)
+    def save(self, path):
+        if self.params is None:
+            print("Nothing to save.")
+            return
 
-        # --- NN prediction part ---
-        cosmo_tile = np.tile(cosmo_params, (len(k_to_predict), 1))
-        raw_in = np.column_stack([cosmo_tile, np.log10(k_to_predict)])
-        norm_in = (raw_in - self.scalers["in_mean"]) / self.scalers["in_std"]
-        t_in = torch.tensor(norm_in, dtype=torch.float32).to(self.device)
-        with torch.no_grad():
-            norm_out = self.model(t_in).cpu().numpy()
-        pred_all = (
-            (norm_out * self.scalers["tgt_std"]) + self.scalers["tgt_mean"]
-        ).flatten()
-        k_pred_map = dict(zip(k_to_predict, pred_all))
-        # --- End of NN prediction part ---
-
-        # 4. Get predictions for the user's k_array
-        alpha_pred = np.array([k_pred_map[k] for k in k_array])
-
-        # 5. Calculate the asymptotic value from the low-k range
-        alpha_asymp_values = np.array([k_pred_map[k] for k in k_asymp_range])
-        alpha_asymptotic = np.mean(alpha_asymp_values)
-
-        # 6. Apply the smooth transition using a sigmoid function
-        def sigmoid(x):
-            return 1 / (1 + np.exp(-x))
-
-        # Weighting function w(k) goes from 0 (asymptotic) to 1 (emulator)
-        w = sigmoid((k_array - k_pivot) / transition_width)
-
-        # Combine the asymptotic value and the emulator prediction
-        alpha_final = w * alpha_pred + (1 - w) * alpha_asymptotic
-
-        return alpha_final.flatten()
-
-    def save(self):
-        state = {
-            "state_dict": self.model.state_dict(),
-            "scalers": self.scalers,
-            "hp": self.hp,
-            "k_grid": self.k_grid,
-        }
-        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(state, self.checkpoint_path)
-        print(f"Emulator saved to {self.checkpoint_path}")
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            path,
+            log_amp=self.params["log_amp"],
+            log_scale=self.params["log_scale"],
+            X_train=self.X_train,
+            Y_train=self.Y_train,
+            Y_err_train=self.Y_err_train,
+            x_mean=self.x_mean,
+            x_std=self.x_std,
+            y_mean=self.y_mean,
+            y_std=self.y_std,
+            hp=self.hp,
+        )
+        print(f"GP Emulator saved to {path}")
 
     def load(self, path):
-        # weights_only=False required for custom dicts with numpy arrays
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-        self.scalers = checkpoint["scalers"]
-        self.hp = checkpoint["hp"]
-        self.k_grid = checkpoint["k_grid"]
+        data = np.load(path, allow_pickle=True)
+        self.params = {
+            "log_amp": jnp.array(data["log_amp"]),
+            "log_scale": jnp.array(data["log_scale"]),
+        }
+        self.X_train = jnp.array(data["X_train"])
+        self.Y_train = jnp.array(data["Y_train"])
+        self.Y_err_train = jnp.array(data["Y_err_train"])
 
-        self.model = MatterAlphaNet(
-            len(self.scalers["in_mean"]),
-            len(self.scalers["tgt_mean"]),
-            self.scalers,
-            self.hp,
-        )
-        self.model.load_state_dict(checkpoint["state_dict"])
-        self.model.to(self.device)
-        self.model.eval()
-        print(f"Loaded emulator from {path}")
+        self.x_mean = data["x_mean"]
+        self.x_std = data["x_std"]
+        self.y_mean = data.get("y_mean", 0.0)
+        self.y_std = data.get("y_std", 1.0)
+        self.hp = data["hp"].item()
+
+        print(f"GP Emulator loaded from {path}")
 
     def compare(self, imodel, save_plot=True):
-        if not hasattr(self, "model") or self.model is None:
-            raise ValueError("Model not loaded.")
+        if self.params is None:
+            raise ValueError("GP not trained or loaded.")
 
         cosmo = load_cosmology_wrapper(imodel)
         k_NL, Pk_NL = load_pkmm_data(imodel, return_mean=True)
         k_L, Pk_L = self.get_linear_pk_mm(cosmo)  # Uses internal method
 
         # Interpolate truth
-        _kk = np.geomspace(1e-2, 14.0, 100)
+        _kk = np.geomspace(self.hp["k_min"], self.hp["k_max"], 100)
         spl_NL = InterpolatedUnivariateSpline(np.log10(k_NL), np.log10(Pk_NL), k=3)
         spl_L = InterpolatedUnivariateSpline(np.log10(k_L), np.log10(Pk_L), k=3)
         alpha_true = 10 ** spl_NL(np.log10(_kk)) / 10 ** spl_L(np.log10(_kk))
 
-        alpha_pred = self.predict(cosmo, _kk)  # already flattened
+        alpha_pred, alpha_std = self.predict(cosmo, _kk)
+
+        # Asymptotic value
+        k_asymp_range = np.linspace(0.04, 0.09, 5)
+        alpha_asymp_pred, _ = self.predict(cosmo, k_asymp_range)
+        alpha_asymptotic = np.mean(alpha_asymp_pred)
+
+        # Find threshold k
+        try:
+            k_threshold_idx = np.where(
+                np.abs(alpha_pred - alpha_asymptotic) / alpha_asymptotic > 0.01
+            )[0][0]
+            k_threshold = _kk[k_threshold_idx]
+            print(
+                f"k threshold where alpha varies > 1% from asymptotic: {k_threshold:.4f} h/Mpc"
+            )
+        except IndexError:
+            print(
+                "Alpha does not vary more than 1% from asymptotic in the plotted range."
+            )
 
         mse = np.mean((alpha_pred - alpha_true) ** 2)
         mean_frac_error = np.mean(np.abs((alpha_pred - alpha_true) / alpha_true))
@@ -384,6 +357,19 @@ class MatterAlphaEmulator:
                 _kk, alpha_true, "k", marker=".", markersize=4, lw=0, label="Truth"
             )
             ax[0].plot(_kk, alpha_pred, "r-", label="Emulator")
+            ax[0].fill_between(
+                _kk,
+                alpha_pred - alpha_std,
+                alpha_pred + alpha_std,
+                color="red",
+                alpha=0.2,
+            )
+            ax[0].axhline(
+                alpha_asymptotic,
+                color="b",
+                linestyle="--",
+                label=f"Asymptotic alpha ({alpha_asymptotic:.3f})",
+            )
             ax[0].set_ylabel(r"$\alpha(k)$")
             ax[0].set_xscale("log")
             ax[0].legend()
@@ -393,74 +379,7 @@ class MatterAlphaEmulator:
             ax[1].set_ylim([-0.11, 0.11])
             ax[1].set_xlabel(r"$k$ [$h$ Mpc$^{-1}$]")
             plt.tight_layout()
-            plt.savefig(f"compare_alpha_model_{imodel}.pdf")
-            plt.close()
-
-        return {"mse": mse, "mean_frac_error": mean_frac_error}
-
-
-class MatterPkEmulator(MatterAlphaEmulator):
-    def __init__(
-        self,
-        checkpoint_path=MODULE_DIR / "checkpoints/matter_alpha_z0.25.pt",
-    ):
-        super().__init__(checkpoint_path=checkpoint_path)
-
-    def predict(self, cosmo_params, k_array):
-        """
-        Predict P_nonlinear(k) = alpha_pred(k) * P_linear_CAMB(k)
-        Warning: This calls CAMB and is slower than pure emulation.
-        """
-        # 1. Get Alpha from NN (fast)
-        alpha_pred = super().predict(cosmo_params, k_array)
-
-        # 2. Get Linear Pk from CAMB (slow)
-        k_Lin, P_Lin = self.get_linear_pk_mm(cosmo_params)
-
-        # 3. Interpolate Linear Pk to k_array
-        spl_L = InterpolatedUnivariateSpline(np.log10(k_Lin), np.log10(P_Lin), k=3)
-        P_L_interp = 10 ** spl_L(np.log10(k_array))
-
-        return alpha_pred * P_L_interp
-
-    def compare(self, imodel, save_plot=True):
-        if not hasattr(self, "model") or self.model is None:
-            raise ValueError("Model not loaded.")
-
-        cosmo = load_cosmology_wrapper(imodel)
-        k_NL, Pk_NL = load_pkmm_data(imodel, return_mean=True)
-        mask_k = k_NL <= 12.0
-        k_NL = k_NL[mask_k]
-        Pk_NL = Pk_NL[mask_k]
-
-        Pk_pred = self.predict(cosmo, k_NL)
-
-        mse = np.mean((Pk_pred - Pk_NL) ** 2)
-        mean_frac_error = np.mean(np.abs((Pk_pred - Pk_NL) / Pk_NL))
-
-        print(f"--- Model {imodel} ---")
-        print(f"MSE: {mse:.2e}")
-        print(f"Mean Frac Error: {mean_frac_error*100:.2f}%")
-
-        if save_plot:
-            import matplotlib.pyplot as plt
-
-            fig, ax = plt.subplots(
-                2, 1, sharex=True, figsize=(8, 6), gridspec_kw={"height_ratios": [3, 1]}
-            )
-            ax[0].plot(k_NL, k_NL * Pk_NL, "k-", label="Truth")
-            ax[0].plot(k_NL, k_NL * Pk_pred, "r--", label="Emulator")
-            ax[0].set_ylabel(r"$k P(k)$")
-            ax[0].set_xscale("log")
-            ax[0].legend()
-            ax[1].plot(k_NL, (Pk_pred / Pk_NL) - 1, "r-")
-            ax[1].axhline(0, color="k", linestyle=":")
-            ax[1].set_ylabel("Frac. Err")
-            ax[1].set_ylim([-0.11, 0.11])
-            ax[1].set_xlabel(r"$k$ [$h$ Mpc$^{-1}$]")
-
-            plt.tight_layout()
-            plt.savefig(f"compare_Pk_mm_model_{imodel}.pdf")
+            plt.savefig(f"compare_alpha_model_gp_{imodel}.pdf")
             plt.close()
 
         return {"mse": mse, "mean_frac_error": mean_frac_error}
