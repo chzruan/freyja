@@ -10,7 +10,8 @@ import optax
 from typing import Tuple, Optional, Dict, Any
 from scipy.interpolate import InterpolatedUnivariateSpline
 
-from ..cosma.xi_hh import load_cosmology_wrapper, load_pkmm_data
+from ..cosma.xi_hh import load_cosmology_wrapper, load_ximm_data
+from ..utils.pk_to_xi import compute_xi_from_Pk
 
 MODULE_DIR = Path(__file__).parent
 
@@ -19,9 +20,9 @@ MODULE_DIR = Path(__file__).parent
 HP = {
     "redshift": 0.25,
     "n_models": 59,
-    "k_min": 0.008,
-    "k_max": 20.0,
-    "n_k_bins": 50,
+    "r_min": 0.1,
+    "r_max": 120.0,
+    "n_r_bins": 180,
     "loss_epsilon": 1e-6,
 }
 
@@ -56,16 +57,14 @@ def build_gp(params, X, diag_noise):
     return GaussianProcess(kernel, X, diag=diag_noise)
 
 
-class MatterAlphaEmulator:
+class MatterXiEmulator:
     """
-    Gaussian Process Emulator for the matter power spectrum boost factor alpha(k).
-
-    This class emulates the ratio alpha(k) = P_NL(k) / P_L(k).
+    Gaussian Process Emulator for the matter correlation function r^2 * xi_mm(r).
     """
 
     def __init__(
         self,
-        checkpoint_path=MODULE_DIR / "checkpoints" / "matter_alpha_gp_z0.25.npz",
+        checkpoint_path=MODULE_DIR / "checkpoints" / "matter_xi_gp_z0.25.npz",
         hp=HP,
     ):
         self.hp = hp
@@ -73,7 +72,7 @@ class MatterAlphaEmulator:
         self.params = None
         self.X_train = None
         self.Y_train = None
-        self.Y_err_train = None  # Placeholder, not used for now
+        self.Y_err_train = None
         self.X_val = None
         self.Y_val = None
         self.Y_err_val = None
@@ -83,8 +82,8 @@ class MatterAlphaEmulator:
         self.y_mean = None
         self.y_std = None
 
-        self.k_grid = np.logspace(
-            np.log10(self.hp["k_min"]), np.log10(self.hp["k_max"]), self.hp["n_k_bins"]
+        self.r_grid = np.geomspace(
+            self.hp["r_min"], self.hp["r_max"], self.hp["n_r_bins"]
         )
 
         if checkpoint_path is not None:
@@ -99,7 +98,7 @@ class MatterAlphaEmulator:
         ombh2=0.022,
         omch2=0.122,
         ns=0.965,
-        kmax=10.0,
+        kmax=20.0,
         npoints=2000,
     ):
         """
@@ -135,8 +134,8 @@ class MatterAlphaEmulator:
 
         return kh, pk_final[z_index], new_As
 
-    def get_linear_pk_mm(self, cosmo_params):
-        Om0, h, S8, ns = cosmo_params
+    def get_linear_pk_mm(self, cosmo):
+        Om0, h, S8, ns = cosmo
         sigma8 = S8 / np.sqrt(Om0 / 0.3)
         omega_b_h2 = 0.0224
         omega_c_h2 = Om0 * h**2 - omega_b_h2
@@ -158,24 +157,25 @@ class MatterAlphaEmulator:
         Vectorized data preparation with train-validation split.
         """
         all_inputs, all_targets = [], []
-        log_k_vec = np.log10(self.k_grid)[:, None]
-        n_bins = len(self.k_grid)
+        log_r_vec = np.log10(self.r_grid)[:, None]
+        n_bins = len(self.r_grid)
 
         for imodel in range(1, self.hp["n_models"] + 1):
             cosmo = load_cosmology_wrapper(imodel)
-            k_NL, Pk_NL = load_pkmm_data(imodel, return_mean=True)
-            k_L, Pk_L = self.get_linear_pk_mm(cosmo)
+            xi_mm = load_ximm_data(r_output=self.r_grid, imodel=imodel)
 
-            spl_NL = InterpolatedUnivariateSpline(np.log10(k_NL), np.log10(Pk_NL), k=3)
-            spl_L = InterpolatedUnivariateSpline(np.log10(k_L), np.log10(Pk_L), k=3)
+            k_Lin, P_Lin = self.get_linear_pk_mm(cosmo)
+            xi_lin = compute_xi_from_Pk(
+                k_input=k_Lin, P_input=P_Lin, r_output=self.r_grid, smooth_xi=False
+            )
 
-            log_ratio = spl_NL(np.log10(self.k_grid)) - spl_L(np.log10(self.k_grid))
-            pk_ratio = 10**log_ratio
+            # Target is xi / xi_lin
+            target = xi_mm / xi_lin
 
             cosmo_tiled = np.tile(cosmo, (n_bins, 1))
-            model_inputs = np.hstack([cosmo_tiled, log_k_vec])
+            model_inputs = np.hstack([cosmo_tiled, log_r_vec])
             all_inputs.append(model_inputs)
-            all_targets.append(pk_ratio[:, None])
+            all_targets.append(target[:, None])
 
         inputs = np.vstack(all_inputs)
         targets = np.vstack(all_targets)
@@ -211,11 +211,11 @@ class MatterAlphaEmulator:
 
     def train(
         self,
-        learning_rate=0.01,
-        n_steps=2000,
-        patience=20,
+        learning_rate=0.010,
+        n_steps=2200,
+        patience=10,
         min_delta=1e-5,
-        validation_split=0.2,
+        validation_split=0.20,
     ):
         if self.X_train is None:
             self._prepare_data(validation_split=validation_split)
@@ -251,7 +251,7 @@ class MatterAlphaEmulator:
                 self.params, opt_state, self.X_train, self.Y_train, self.Y_err_train
             )
 
-            if i > 0 and i % 50 == 0:
+            if i > 0 and i % 20 == 0:
                 val_loss = val_loss_fn(
                     self.params, self.X_val, self.Y_val, self.Y_err_val
                 )
@@ -265,7 +265,7 @@ class MatterAlphaEmulator:
 
                 if patience_counter >= patience:
                     print(
-                        f"Early stopping at step {i}. No improvement in validation loss for {patience * 50} steps."
+                        f"Early stopping at step {i}. No improvement in validation loss for {patience * 20} steps."
                     )
                     break
 
@@ -273,15 +273,15 @@ class MatterAlphaEmulator:
         print(f"Final Loss: {final_loss:.4f}")
         print(f"Optimized Params: {self.params}")
 
-    def _predict_raw(self, cosmo_params, k_array):
+    def _predict_raw(self, cosmo, r_array):
         if self.params is None:
             raise ValueError("GP not trained or loaded.")
 
-        k_array = np.atleast_1d(k_array)
-        log10k = np.log10(k_array)
+        r_array = np.atleast_1d(r_array)
+        log10r = np.log10(r_array)
 
-        cosmo_tile = np.tile(cosmo_params, (len(log10k), 1))
-        raw_in = np.column_stack([cosmo_tile, log10k])
+        cosmo_tile = np.tile(cosmo, (len(log10r), 1))
+        raw_in = np.column_stack([cosmo_tile, log10r])
         norm_in = (raw_in - self.x_mean) / self.x_std
         X_test = jnp.array(norm_in)
 
@@ -291,29 +291,26 @@ class MatterAlphaEmulator:
         mu_norm = cond.gp.mean
         var_norm = cond.gp.variance
 
-        alpha_pred = (np.array(mu_norm) * self.y_std) + self.y_mean
-        alpha_std = np.array(jnp.sqrt(var_norm)) * self.y_std
+        r2_xi_pred = (np.array(mu_norm) * self.y_std) + self.y_mean
+        r2_xi_std = np.array(jnp.sqrt(var_norm)) * self.y_std
 
-        return alpha_pred, alpha_std
+        return r2_xi_pred, r2_xi_std
 
-    def predict(self, cosmo_params, k_array):
-        # Get raw predictions for the input k_array first
-        alpha_pred, alpha_std = self._predict_raw(cosmo_params, k_array)
+    def predict(self, cosmo, r_array):
+        r_array = np.atleast_1d(r_array)
+        xiratio_pred, xiratio_std = self._predict_raw(cosmo, r_array)
 
-        # Asymptotic value
-        k_asymp_range = np.linspace(0.04, 0.09, 5)
-        alpha_asymp_pred, alpha_asymp_std = self._predict_raw(
-            cosmo_params, k_asymp_range
+        mask_r = r_array >= 59.0
+        # Force prediction to 1 at large r where xi_mm ~ xi_lin
+        xiratio_pred[mask_r] = 1.0
+        xiratio_std[mask_r] = 0.0
+
+        k_Lin, P_Lin = self.get_linear_pk_mm(cosmo)
+        xi_lin = compute_xi_from_Pk(
+            k_input=k_Lin, P_input=P_Lin, r_output=r_array, smooth_xi=False
         )
-        alpha_asymptotic = np.mean(alpha_asymp_pred)
-        alpha_asymptotic_std = np.mean(alpha_asymp_std)
 
-        # Replace low-k values
-        low_k_mask = k_array < 0.09
-        alpha_pred[low_k_mask] = alpha_asymptotic
-        alpha_std[low_k_mask] = alpha_asymptotic_std
-
-        return alpha_pred, alpha_std
+        return xiratio_pred * xi_lin, xiratio_std * xi_lin
 
     def save(self, path):
         if self.params is None:
@@ -351,6 +348,7 @@ class MatterAlphaEmulator:
         self.x_std = data["x_std"]
         self.y_mean = data.get("y_mean", 0.0)
         self.y_std = data.get("y_std", 1.0)
+
         self.hp = data["hp"].item()
 
         print(f"GP Emulator loaded from {path}")
@@ -360,40 +358,29 @@ class MatterAlphaEmulator:
             raise ValueError("GP not trained or loaded.")
 
         cosmo = load_cosmology_wrapper(imodel)
-        k_NL, Pk_NL = load_pkmm_data(imodel, return_mean=True)
-        k_L, Pk_L = self.get_linear_pk_mm(cosmo)  # Uses internal method
 
-        # Interpolate truth
-        _kk = np.geomspace(self.hp["k_min"], self.hp["k_max"], 100)
-        spl_NL = InterpolatedUnivariateSpline(np.log10(k_NL), np.log10(Pk_NL), k=3)
-        spl_L = InterpolatedUnivariateSpline(np.log10(k_L), np.log10(Pk_L), k=3)
-        alpha_true = 10 ** spl_NL(np.log10(_kk)) / 10 ** spl_L(np.log10(_kk))
+        # Use a standard r range for comparison
+        # r_true = np.geomspace(self.hp["r_min"], self.hp["r_max"], 100)
+        r_true = np.geomspace(0.1, 105.1, 100)
+        xi_true = load_ximm_data(r_output=r_true, imodel=imodel)
 
-        alpha_pred, alpha_std = self.predict(cosmo, _kk)
+        k_Lin, P_Lin = self.get_linear_pk_mm(cosmo)
+        xi_lin = compute_xi_from_Pk(
+            k_input=k_Lin, P_input=P_Lin, r_output=r_true, smooth_xi=False
+        )
 
-        # Asymptotic value
-        k_asymp_range = np.linspace(0.04, 0.09, 5)
-        alpha_asymp_pred, _ = self.predict(cosmo, k_asymp_range)
-        alpha_asymptotic = np.mean(alpha_asymp_pred)
+        # 2. Predict
+        xi_pred, xi_std = self.predict(cosmo, r_true)
 
-        # Find threshold k
-        try:
-            k_threshold_idx = np.where(
-                np.abs(alpha_pred - alpha_asymptotic) / alpha_asymptotic > 0.01
-            )[0][0]
-            k_threshold = _kk[k_threshold_idx]
-            print(
-                f"k threshold where alpha varies > 1% from asymptotic: {k_threshold:.4f} h/Mpc"
-            )
-        except IndexError:
-            print(
-                "Alpha does not vary more than 1% from asymptotic in the plotted range."
-            )
+        # 3. Metrics
+        mse = np.mean((xi_pred - xi_true) ** 2)
+        # Avoid division by zero where xi crosses zero
+        mask = np.abs(xi_true) > 1e-4
+        mean_frac_error = np.mean(
+            np.abs((xi_pred[mask] - xi_true[mask]) / xi_true[mask])
+        )
 
-        mse = np.mean((alpha_pred - alpha_true) ** 2)
-        mean_frac_error = np.mean(np.abs((alpha_pred - alpha_true) / alpha_true))
-
-        print(f"--- Model {imodel} ---")
+        print(f"--- Xi Evaluation for Model {imodel} ---")
         print(f"MSE: {mse:.2e}")
         print(f"Mean Frac Error: {mean_frac_error*100:.2f}%")
 
@@ -401,115 +388,35 @@ class MatterAlphaEmulator:
             import matplotlib.pyplot as plt
 
             fig, ax = plt.subplots(
-                2,
-                1,
-                sharex=True,
-                figsize=(8, 6),
-                gridspec_kw={"height_ratios": [3, 1]},
+                2, 1, sharex=True, figsize=(8, 6), gridspec_kw={"height_ratios": [3, 1]}
             )
-            ax[0].plot(
-                _kk, alpha_true, "k", marker=".", markersize=4, lw=0, label="Truth"
-            )
-            ax[0].plot(_kk, alpha_pred, "r-", label="Emulator")
+
+            # Top panel: r^2 * xi(r) to flatten dynamic range
+            ax[0].plot(r_true, r_true**2 * xi_true, "k-", label="Truth (Sim)")
+            ax[0].plot(r_true, r_true**2 * xi_pred, "r--", label="Emulator (GP)")
             ax[0].fill_between(
-                _kk,
-                alpha_pred - alpha_std,
-                alpha_pred + alpha_std,
+                r_true,
+                r_true**2 * (xi_pred - xi_std),
+                r_true**2 * (xi_pred + xi_std),
                 color="red",
                 alpha=0.2,
             )
-            ax[0].axhline(
-                alpha_asymptotic,
-                color="b",
-                linestyle="--",
-                label=f"Asymptotic alpha ({alpha_asymptotic:.3f})",
-            )
-            ax[0].set_ylabel(r"$\alpha(k)$")
+            ax[0].set_ylabel(r"$r^2 \xi(r)$")
             ax[0].set_xscale("log")
             ax[0].legend()
-            ax[1].plot(_kk, (alpha_pred / alpha_true) - 1, "r-")
+            ax[0].set_title(f"Xi Emulator Validation: Model {imodel}")
+
+            # Bottom panel: Fractional Error
+            ax[1].plot(r_true[mask], (xi_pred[mask] / xi_true[mask]) - 1, "r-")
             ax[1].axhline(0, color="k", linestyle=":")
-            ax[1].set_ylabel("Frac. Err")
-            ax[1].set_ylim([-0.11, 0.11])
-            ax[1].set_xlabel(r"$k$ [$h$ Mpc$^{-1}$]")
+            ax[1].set_ylabel(r"$\Delta \xi / \xi$")
+            ax[1].set_ylim([-0.1, 0.1])
+            ax[1].set_xlabel(r"$r$ [$h^{-1}$Mpc]")
+
+            out_path = f"compare_xi_model_gp_{imodel}.pdf"
             plt.tight_layout()
-            plt.savefig(f"compare_alpha_model_gp_{imodel}.pdf")
+            plt.savefig(out_path)
             plt.close()
-
-        return {"mse": mse, "mean_frac_error": mean_frac_error}
-
-
-class MatterPkEmulator(MatterAlphaEmulator):
-    """
-    Gaussian Process Emulator for the non-linear matter power spectrum P_NL(k).
-    """
-
-    def __init__(
-        self,
-        checkpoint_path=MODULE_DIR / "checkpoints" / "matter_alpha_gp_z0.25.npz",
-        hp=HP,
-    ):
-        super().__init__(checkpoint_path=checkpoint_path, hp=hp)
-
-    def predict(self, cosmo_params, k_array):
-        """
-        Predicts the non-linear matter power spectrum P_NL(k) by multiplying the emulated alpha(k) with the linear P_L(k).
-
-        Parameters:
-        - cosmo_params: Tuple of cosmological parameters (Om0, h, S8, ns)
-        - k_array: Array of k values to predict P_NL(k) at.
-
-        Returns:
-        - P_pred: Array of predicted P_NL(k) values.
-        """
-        alpha_pred, _ = super().predict(cosmo_params, k_array)
-        k_Lin, P_Lin = self.get_linear_pk_mm(cosmo_params)
-        P_pred = alpha_pred * 10 ** np.interp(
-            np.log10(k_array), np.log10(k_Lin), np.log10(P_Lin)
-        )
-
-        return P_pred
-
-    def compare(self, imodel, save_plot=True):
-        if self.params is None:
-            raise ValueError("GP not trained or loaded.")
-
-        cosmo = load_cosmology_wrapper(imodel)
-        k_NL, Pk_NL = load_pkmm_data(imodel, return_mean=True)
-        Pk_pred = self.predict(cosmo, k_NL)
-
-        mse = np.mean((Pk_pred - Pk_NL) ** 2)
-        mean_frac_error = np.mean(np.abs((Pk_pred - Pk_NL) / Pk_NL))
-
-        print(f"--- Model {imodel} ---")
-        print(f"MSE: {mse:.2e}")
-        print(f"Mean Frac Error: {mean_frac_error*100:.2f}%")
-
-        if save_plot:
-            import matplotlib.pyplot as plt
-
-            fig, ax = plt.subplots(
-                2,
-                1,
-                sharex=True,
-                figsize=(8, 6),
-                gridspec_kw={"height_ratios": [3, 1]},
-            )
-            _kk = k_NL
-            ax[0].plot(
-                _kk, _kk * Pk_NL, "k", marker=".", markersize=4, lw=0, label="Truth"
-            )
-            ax[0].plot(_kk, _kk * Pk_pred, "r-", label="Emulator")
-            ax[0].set_ylabel(r"$k \times P(k)$")
-            ax[0].set_xscale("log")
-            ax[0].legend()
-            ax[1].plot(_kk, (Pk_pred / Pk_NL) - 1, "r-")
-            ax[1].axhline(0, color="k", linestyle=":")
-            ax[1].set_ylabel("Frac. Err")
-            ax[1].set_ylim([-0.11, 0.11])
-            ax[1].set_xlabel(r"$k$ [$h$ Mpc$^{-1}$]")
-            plt.tight_layout()
-            plt.savefig(f"compare_pk_model_gp_{imodel}.pdf")
-            plt.close()
+            print(f"Plot saved to {out_path}")
 
         return {"mse": mse, "mean_frac_error": mean_frac_error}
