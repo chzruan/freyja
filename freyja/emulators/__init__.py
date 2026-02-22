@@ -2,7 +2,7 @@ from .halo_mass_function import HMFEmulator
 from .halo_linear_bias import HaloLinearBiasEmulator
 from .xi_R_hh_diffM import (
     HaloBetaEmulator,
+    HaloXiDiffMCalculator,
 )  # scale-dependent halo bias beta(r | M1, M2) = xi_hh(r | M1, M2) / xi_mm(r)
 from .pk_mm import MatterAlphaEmulator
-
-# from .xi_R_hh import HaloXiRCalculator
+from .xi_mm import MatterXiEmulator
