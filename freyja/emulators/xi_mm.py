@@ -361,7 +361,7 @@ class MatterXiEmulator:
 
         # Use a standard r range for comparison
         # r_true = np.geomspace(self.hp["r_min"], self.hp["r_max"], 100)
-        r_true = np.geomspace(0.1, 105.1, 100)
+        r_true = np.geomspace(0.1, 105.1, 200)
         xi_true = load_ximm_data(r_output=r_true, imodel=imodel)
 
         k_Lin, P_Lin = self.get_linear_pk_mm(cosmo)
