@@ -59,7 +59,7 @@ class HaloBetaEmulator:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Extrapolation state
-        self.bias_emu = None
+        self.linear_bias_emulator = None
         self.bias_params_cache = {}  # Cache for power-law fits per cosmology
         self.logM_limit = self.HP.get("logM_cut_max", 13.8)
         self.extrap_window = 0.5  # Width of the fitting window in dex
@@ -119,8 +119,13 @@ class HaloBetaEmulator:
             xi_sem_cut = xi_sem[mask_M][:, mask_M, :][:, :, mask_r]
             xi_mm_cut = xi_mm[mask_r]
 
-            beta = xi_hh_cut / xi_mm_cut[None, None, :]
-            beta_sem = xi_sem_cut / xi_mm_cut[None, None, :]
+            # linear bias
+            mask_bias = (r_all <= 75.0) & (r_all >= 35.0)
+            ratio_sq = xi_hh[mask_M][:, mask_M, mask_bias] / xi_mm_cut[None, mask_bias]
+            b1_sq = np.mean(ratio_sq, axis=2)
+
+            beta = xi_hh_cut / xi_mm_cut[None, None, :] / b1_sq
+            beta_sem = xi_sem_cut / xi_mm_cut[None, None, :] / b1_sq
 
             inputs, targets, weights = [], [], []
             N_M = len(logM_bins)
@@ -250,7 +255,7 @@ class HaloBetaEmulator:
     def load_bias_emulator(self, path):
         """Loads the scalar HaloLinearBiasEmulator used for high-mass extrapolation."""
         try:
-            self.bias_emu = HaloLinearBiasEmulator(saved_path=path)
+            self.linear_bias_emulator = HaloLinearBiasEmulator(saved_path=path)
             print(f"Loaded auxiliary HaloLinearBiasEmulator from {path}")
         except Exception as e:
             print(f"Warning: Failed to load HaloLinearBiasEmulator: {e}")
@@ -293,68 +298,6 @@ class HaloBetaEmulator:
             (norm_out * self.scalers["tgt_std"]) + self.scalers["tgt_mean"],
         )
 
-    # =========================================================
-    #  Extrapolation Logic (New Implementation)
-    # =========================================================
-
-    def _get_bias_power_law(self, cosmo):
-        """
-        Fits b(M) = b_edge * (M/M_piv)^alpha to the scalar bias emulator
-        at the high-mass end for robust amplitude extrapolation.
-        """
-        if self.bias_emu is None:
-            raise RuntimeError("HaloLinearBiasEmulator not loaded. Cannot extrapolate.")
-
-        # Sample bias near the edge of the training set
-        logM_sample = np.linspace(
-            self.logM_limit - self.extrap_window, self.logM_limit, 10
-        )
-
-        b_sample = []
-        for m in logM_sample:
-            # Auto-bias b(M) ~ sqrt(B_ii) using v=0
-            # bias_emu.predict_uv returns (val, std), we take val
-            b_val, _ = self.bias_emu.predict_uv(cosmo, m, 0.0)
-            b_sample.append(np.sqrt(max(b_val, 1e-4)))
-
-        b_sample = np.array(b_sample)
-        M_sample = 10**logM_sample
-        M_piv = 10**self.logM_limit
-
-        # Power law model
-        def power_law(m, alpha):
-            return b_sample[-1] * (m / M_piv) ** alpha
-
-        # Fit alpha (slope)
-        try:
-            popt, _ = curve_fit(power_law, M_sample, b_sample, p0=[1.0])
-            alpha = popt[0]
-        except:
-            alpha = 1.0  # Fallback to linear
-
-        return b_sample[-1], alpha, M_piv
-
-    def get_linear_bias(self, cosmo, logM):
-        """
-        Returns linear bias b(M). Uses emulator interpolation if within bounds,
-        or power-law extrapolation if outside.
-        """
-        # Cache power-law params for this cosmology to save compute
-        cosmo_key = cosmo.tobytes()
-        if cosmo_key not in self.bias_params_cache:
-            self.bias_params_cache[cosmo_key] = self._get_bias_power_law(cosmo)
-
-        b_edge, alpha, M_piv = self.bias_params_cache[cosmo_key]
-
-        if logM <= self.logM_limit:
-            if self.bias_emu is None:
-                return 1.0  # Fail safe
-            print(f"{logM = :.2f}")
-            b_val, _ = self.bias_emu.predict(cosmo, np.array([logM]))
-            return np.sqrt(max(b_val, 1e-4))
-        else:
-            return b_edge * ((10**logM) / M_piv) ** alpha
-
     def predict_from_masses(self, cosmo_params, logM1, logM2):
         """
         Primary prediction method for physical usage.
@@ -373,7 +316,7 @@ class HaloBetaEmulator:
         beta : np.ndarray
             Predicted scale-dependent bias.
         """
-        if self.bias_emu is None and (
+        if self.linear_bias_emulator is None and (
             logM1 > self.logM_limit or logM2 > self.logM_limit
         ):
             print(
@@ -452,7 +395,59 @@ class HaloBetaEmulator:
         return self.r_bins, beta_matrix
 
     def predict(self, cosmo_params, logM_bins):
-        return self.predict_noextrapolation(cosmo_params, logM_bins)
+        mask_extrap = logM_bins > self.logM_limit
+        
+        # Optimization for no-extrapolation case
+        if not np.any(mask_extrap):
+            return self.predict_noextrapolation(cosmo_params, logM_bins)
+
+        idx_noextrap = np.where(~mask_extrap)[0]
+        idx_extrap = np.where(mask_extrap)[0]
+        
+        logM_noextrap = logM_bins[idx_noextrap]
+
+        # predict_noextrapolation can be called with an empty array.
+        # It will return r_bins and an empty beta_matrix.
+        r_bins, beta_noextrap_submatrix = self.predict_noextrapolation(
+            cosmo_params, logM_noextrap
+        )
+        
+        n_bins = len(logM_bins)
+        n_r = len(r_bins)
+        beta_full = np.zeros((n_bins, n_bins, n_r))
+
+        if len(logM_noextrap) > 0:
+            beta_full[np.ix_(idx_noextrap, idx_noextrap)] = beta_noextrap_submatrix
+
+        if len(idx_extrap) > 0:
+            logM_extrap = logM_bins[idx_extrap]
+            
+            linear_bias_extrap = self.linear_bias_emulator.predict(cosmo_params, logM_extrap)
+            linear_bias_limit = self.linear_bias_emulator.predict(cosmo_params, np.array([self.logM_limit]))[0]
+            
+            _, beta_limit_submatrix = self.predict_noextrapolation(cosmo_params, np.array([self.logM_limit]))
+            beta_limit = beta_limit_submatrix[0, 0, :]
+
+            # This is beta_norm(M) ~ b(M)/b(limit) * beta_norm(limit)
+            ratio_b = linear_bias_extrap / linear_bias_limit
+            beta_extrap_M_r = np.outer(ratio_b, beta_limit) # Shape (N_extrap, N_r)
+            
+            # (m, M) block - assuming independent of m
+            if len(idx_noextrap) > 0:
+                block_m_M = np.tile(beta_extrap_M_r, (len(idx_noextrap), 1, 1))
+                beta_full[np.ix_(idx_noextrap, idx_extrap)] = block_m_M
+                
+                # (M, m) block
+                # np.transpose swaps axes. We need to swap 0 and 1.
+                beta_full[np.ix_(idx_extrap, idx_noextrap)] = np.transpose(block_m_M, (1, 0, 2))
+            
+            # (M, M') block
+            b_MM_outer = np.outer(linear_bias_extrap, linear_bias_extrap)
+            ratio_b_sq = b_MM_outer / (linear_bias_limit**2)
+            beta_extrap_M_M = ratio_b_sq[:, :, np.newaxis] * beta_limit[np.newaxis, np.newaxis, :]
+            beta_full[np.ix_(idx_extrap, idx_extrap)] = beta_extrap_M_M
+
+        return r_bins, beta_full
 
     def compare_model_prediction(self, imodel, label="Test", save_plot=True):
         if self.model is None:
