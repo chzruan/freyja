@@ -393,8 +393,7 @@ class HaloLinearBiasEmulator:
 
     def predict(self, cosmo_params, logM_bins):
         """
-        Predicts bias using a Tinker et al. (2010) fit to the GP predictions.
-        Useful for extrapolating or enforcing physical shape constraints in the low-mass range.
+        Predicts bias using a Tinker et al. (2010) fit to the GP predictions in the low-mass range.
 
         Parameters
         ----------
@@ -409,8 +408,6 @@ class HaloLinearBiasEmulator:
         -------
         bias_pred : np.ndarray
             Predicted bias at logM_bins using the Tinker fit.
-        params : np.ndarray
-            Fitted Tinker parameters [A, B, C].
         """
         # 1. Define 'measured' range (where GP is trusted)
         # Current fixed values are for the fixed redshift 0.25 training set, can be made dynamic if needed
@@ -438,7 +435,7 @@ class HaloLinearBiasEmulator:
             cosmo_params=cosmo_tuple,
         )
 
-        return b_ext, popt
+        return b_ext
 
     def save(self, path):
         """Saves the GP state."""
@@ -514,7 +511,7 @@ class HaloLinearBiasEmulator:
         b_err_true = np.sqrt(np.array(b_var_true))
 
         # Predict
-        b_pred, _ = self.predict(cosmo, logM_cut)
+        b_pred = self.predict(cosmo, logM_cut)
 
         # Metrics
         chi2 = np.mean(((b_pred - b_true) / b_err_true) ** 2)

@@ -19,6 +19,8 @@ from .utils_plotting import plot_validation_results
 
 # Import the Scalar Bias Emulator for normalization
 from .halo_linear_bias import HaloLinearBiasEmulator
+from .halo_mass_function import HMFEmulator
+from .xi_mm import MatterXiEmulator
 
 MODULE_DIR = Path(__file__).parent
 
@@ -57,7 +59,7 @@ class HaloBetaEmulator:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Extrapolation state
-        self.bias_emu = None
+        self.linear_bias_emulator = None
         self.bias_params_cache = {}  # Cache for power-law fits per cosmology
         self.logM_limit = self.HP.get("logM_cut_max", 13.8)
         self.extrap_window = 0.5  # Width of the fitting window in dex
@@ -117,8 +119,13 @@ class HaloBetaEmulator:
             xi_sem_cut = xi_sem[mask_M][:, mask_M, :][:, :, mask_r]
             xi_mm_cut = xi_mm[mask_r]
 
-            beta = xi_hh_cut / xi_mm_cut[None, None, :]
-            beta_sem = xi_sem_cut / xi_mm_cut[None, None, :]
+            # linear bias
+            mask_bias = (r_all <= 75.0) & (r_all >= 35.0)
+            ratio_sq = xi_hh[mask_M][:, mask_M, mask_bias] / xi_mm_cut[None, mask_bias]
+            b1_sq = np.mean(ratio_sq, axis=2)
+
+            beta = xi_hh_cut / xi_mm_cut[None, None, :] / b1_sq
+            beta_sem = xi_sem_cut / xi_mm_cut[None, None, :] / b1_sq
 
             inputs, targets, weights = [], [], []
             N_M = len(logM_bins)
@@ -248,7 +255,7 @@ class HaloBetaEmulator:
     def load_bias_emulator(self, path):
         """Loads the scalar HaloLinearBiasEmulator used for high-mass extrapolation."""
         try:
-            self.bias_emu = HaloLinearBiasEmulator(saved_path=path)
+            self.linear_bias_emulator = HaloLinearBiasEmulator(saved_path=path)
             print(f"Loaded auxiliary HaloLinearBiasEmulator from {path}")
         except Exception as e:
             print(f"Warning: Failed to load HaloLinearBiasEmulator: {e}")
@@ -291,68 +298,6 @@ class HaloBetaEmulator:
             (norm_out * self.scalers["tgt_std"]) + self.scalers["tgt_mean"],
         )
 
-    # =========================================================
-    #  Extrapolation Logic (New Implementation)
-    # =========================================================
-
-    def _get_bias_power_law(self, cosmo):
-        """
-        Fits b(M) = b_edge * (M/M_piv)^alpha to the scalar bias emulator
-        at the high-mass end for robust amplitude extrapolation.
-        """
-        if self.bias_emu is None:
-            raise RuntimeError("HaloLinearBiasEmulator not loaded. Cannot extrapolate.")
-
-        # Sample bias near the edge of the training set
-        logM_sample = np.linspace(
-            self.logM_limit - self.extrap_window, self.logM_limit, 10
-        )
-
-        b_sample = []
-        for m in logM_sample:
-            # Auto-bias b(M) ~ sqrt(B_ii) using v=0
-            # bias_emu.predict_uv returns (val, std), we take val
-            b_val, _ = self.bias_emu.predict_uv(cosmo, m, 0.0)
-            b_sample.append(np.sqrt(max(b_val, 1e-4)))
-
-        b_sample = np.array(b_sample)
-        M_sample = 10**logM_sample
-        M_piv = 10**self.logM_limit
-
-        # Power law model
-        def power_law(m, alpha):
-            return b_sample[-1] * (m / M_piv) ** alpha
-
-        # Fit alpha (slope)
-        try:
-            popt, _ = curve_fit(power_law, M_sample, b_sample, p0=[1.0])
-            alpha = popt[0]
-        except:
-            alpha = 1.0  # Fallback to linear
-
-        return b_sample[-1], alpha, M_piv
-
-    def get_linear_bias(self, cosmo, logM):
-        """
-        Returns linear bias b(M). Uses emulator interpolation if within bounds,
-        or power-law extrapolation if outside.
-        """
-        # Cache power-law params for this cosmology to save compute
-        cosmo_key = cosmo.tobytes()
-        if cosmo_key not in self.bias_params_cache:
-            self.bias_params_cache[cosmo_key] = self._get_bias_power_law(cosmo)
-
-        b_edge, alpha, M_piv = self.bias_params_cache[cosmo_key]
-
-        if logM <= self.logM_limit:
-            if self.bias_emu is None:
-                return 1.0  # Fail safe
-            print(f"{logM = :.2f}")
-            b_val, _ = self.bias_emu.predict(cosmo, np.array([logM]))
-            return np.sqrt(max(b_val, 1e-4))
-        else:
-            return b_edge * ((10**logM) / M_piv) ** alpha
-
     def predict_from_masses(self, cosmo_params, logM1, logM2):
         """
         Primary prediction method for physical usage.
@@ -371,7 +316,7 @@ class HaloBetaEmulator:
         beta : np.ndarray
             Predicted scale-dependent bias.
         """
-        if self.bias_emu is None and (
+        if self.linear_bias_emulator is None and (
             logM1 > self.logM_limit or logM2 > self.logM_limit
         ):
             print(
@@ -390,37 +335,7 @@ class HaloBetaEmulator:
         u_target = (m_a + m_b) / 2.0
         v_target = (m_a - m_b) / 2.0  # v <= 0
 
-        # 2. Check Domain
-        is_in_bounds = (u_target + abs(v_target)) <= self.logM_limit
-
-        if is_in_bounds:
-            # --- INTERPOLATION ---
-            return self.predict(cosmo_params, u_target, v_target)
-        else:
-            # --- EXTRAPOLATION (Evolving Shape) ---
-
-            # A. Extrapolated Linear Bias B12 = b(M1)*b(M2)
-            b1 = self.get_linear_bias(cosmo_params, m_a)
-            b2 = self.get_linear_bias(cosmo_params, m_b)
-            b12_extrap = b1 * b2
-
-            # B. Evolved Shape S(r)
-            S_boundary, S_slope, u_boundary = self._get_shape_evolution(
-                cosmo_params, u_target, v_target
-            )
-
-            delta_u = u_target - u_boundary
-
-            # S_pred(r) = S_boundary(r) + slope(r) * delta_u
-            S_pred = S_boundary + (S_slope * delta_u)
-
-            # Safety clamp: Ratio shouldn't go negative
-            S_pred = np.maximum(S_pred, 0.0)
-
-            # C. Final Prediction
-            beta_pred = S_pred * b12_extrap
-
-            return self.r_bins, beta_pred
+        return self.predict_uv(cosmo_params, u_target, v_target)
 
     def predict_noextrapolation(self, cosmo_params, logM_bins):
         """
@@ -480,7 +395,59 @@ class HaloBetaEmulator:
         return self.r_bins, beta_matrix
 
     def predict(self, cosmo_params, logM_bins):
-        return self.predict_noextrapolation(cosmo_params, logM_bins)
+        mask_extrap = logM_bins > self.logM_limit
+        
+        # Optimization for no-extrapolation case
+        if not np.any(mask_extrap):
+            return self.predict_noextrapolation(cosmo_params, logM_bins)
+
+        idx_noextrap = np.where(~mask_extrap)[0]
+        idx_extrap = np.where(mask_extrap)[0]
+        
+        logM_noextrap = logM_bins[idx_noextrap]
+
+        # predict_noextrapolation can be called with an empty array.
+        # It will return r_bins and an empty beta_matrix.
+        r_bins, beta_noextrap_submatrix = self.predict_noextrapolation(
+            cosmo_params, logM_noextrap
+        )
+        
+        n_bins = len(logM_bins)
+        n_r = len(r_bins)
+        beta_full = np.zeros((n_bins, n_bins, n_r))
+
+        if len(logM_noextrap) > 0:
+            beta_full[np.ix_(idx_noextrap, idx_noextrap)] = beta_noextrap_submatrix
+
+        if len(idx_extrap) > 0:
+            logM_extrap = logM_bins[idx_extrap]
+            
+            linear_bias_extrap = self.linear_bias_emulator.predict(cosmo_params, logM_extrap)
+            linear_bias_limit = self.linear_bias_emulator.predict(cosmo_params, np.array([self.logM_limit]))[0]
+            
+            _, beta_limit_submatrix = self.predict_noextrapolation(cosmo_params, np.array([self.logM_limit]))
+            beta_limit = beta_limit_submatrix[0, 0, :]
+
+            # This is beta_norm(M) ~ b(M)/b(limit) * beta_norm(limit)
+            ratio_b = linear_bias_extrap / linear_bias_limit
+            beta_extrap_M_r = np.outer(ratio_b, beta_limit) # Shape (N_extrap, N_r)
+            
+            # (m, M) block - assuming independent of m
+            if len(idx_noextrap) > 0:
+                block_m_M = np.tile(beta_extrap_M_r, (len(idx_noextrap), 1, 1))
+                beta_full[np.ix_(idx_noextrap, idx_extrap)] = block_m_M
+                
+                # (M, m) block
+                # np.transpose swaps axes. We need to swap 0 and 1.
+                beta_full[np.ix_(idx_extrap, idx_noextrap)] = np.transpose(block_m_M, (1, 0, 2))
+            
+            # (M, M') block
+            b_MM_outer = np.outer(linear_bias_extrap, linear_bias_extrap)
+            ratio_b_sq = b_MM_outer / (linear_bias_limit**2)
+            beta_extrap_M_M = ratio_b_sq[:, :, np.newaxis] * beta_limit[np.newaxis, np.newaxis, :]
+            beta_full[np.ix_(idx_extrap, idx_extrap)] = beta_extrap_M_M
+
+        return r_bins, beta_full
 
     def compare_model_prediction(self, imodel, label="Test", save_plot=True):
         if self.model is None:
@@ -545,3 +512,146 @@ class HaloBetaEmulator:
             )
 
         return metrics
+
+
+class HaloXiDiffMCalculator(HaloBetaEmulator, MatterXiEmulator):
+    """
+    Calculator for xi_hh(r | M1, M2) by stitching two approximations:
+    - Small scales: xi_hh = beta(r|M1,M2) * xi_mm(r) from emulators.
+    - Large scales: xi_hh = b(M1) * b(M2) * xi_mm(r) from linear bias.
+    """
+
+    def __init__(self, redshift=0.25, **kwargs):
+        """
+        Initializes the calculator by setting up the necessary emulators.
+
+        Parameters
+        ----------
+        redshift : float, optional
+            The operational redshift for all emulators. Default is 0.25.
+        **kwargs : dict, optional
+            Additional keyword arguments passed to the HaloBetaEmulator,
+            such as `checkpoint_path`, `bias_emulator_path`, etc.
+        """
+        # Initialize the beta emulator, which internally handles the linear bias emulator
+        HaloBetaEmulator.__init__(self, redshift=redshift, **kwargs)
+
+        # Initialize the matter correlation function emulator
+        MatterXiEmulator.__init__(self, redshift=redshift)
+
+        # Define the stitching scale between small-scale and large-scale regimes
+        self.r_stitch = 35.0
+
+        print(
+            f"HaloXiDiffMCalculator initialized. Stitching scale r_stitch = {self.r_stitch:.1f} Mpc/h"
+        )
+
+    def calculate_M12(self, cosmo_params, logM1, logM2, r):
+        """
+        Predicts the halo-halo correlation function xi_hh(r | M1, M2).
+
+        Parameters
+        ----------
+        cosmo_params : np.ndarray
+            Cosmological parameters for the emulators.
+        logM1, logM2 : float
+            Log10 of the two halo masses.
+        r : np.ndarray
+            Array of radial scales (r) in Mpc/h to compute xi_hh at.
+
+        Returns
+        -------
+        np.ndarray
+            The predicted halo-halo correlation function xi_hh(r).
+        """
+        # 1. Predict beta(r) on its native r-bins from the HaloBetaEmulator
+        r_beta_native, beta_native = self.predict_from_masses(
+            cosmo_params, logM1, logM2
+        )
+
+        # 2. Interpolate beta to the requested r-grid
+        beta_interp = np.interp(
+            r, r_beta_native, beta_native, left=beta_native[0], right=beta_native[-1]
+        )
+
+        # 3. Predict the matter correlation function xi_mm(r)
+        xi_mm = MatterXiEmulator.predict(self, cosmo_params, r=r)
+
+        # 4. Compute the small-scale prediction: xi_hh = beta * xi_mm
+        xi_hh_small_scales = beta_interp * xi_mm
+
+        # 5. Compute the large-scale prediction: xi_hh = b1 * b2 * xi_mm
+        b1 = self.get_linear_bias(cosmo_params, logM1)
+        b2 = self.get_linear_bias(cosmo_params, logM2)
+        xi_hh_large_scales = b1 * b2 * xi_mm
+
+        # 6. Smoothly stitch the two regimes using a sigmoid function
+        transition_width = self.HP.get("stitching_width", 2.0)  # in Mpc/h
+        stitching_weights = 1.0 / (
+            1.0 + np.exp(-(r - self.r_stitch) / transition_width)
+        )
+
+        xi_hh_final = (
+            1.0 - stitching_weights
+        ) * xi_hh_small_scales + stitching_weights * xi_hh_large_scales
+
+        return xi_hh_final
+
+    def calculate_mass_matrix(self, cosmo_params, logM_bins, r):
+        """
+        Calculates the full halo-halo correlation function matrix xi_hh(r | M_i, M_j)
+        for a given set of mass bins.
+
+        Parameters
+        ----------
+        cosmo_params : np.ndarray
+            Cosmological parameters.
+        logM_bins : np.ndarray
+            1D array of log10 halo mass bin centers.
+        r : np.ndarray
+            Array of radial scales (r) in Mpc/h.
+
+        Returns
+        -------
+        np.ndarray
+            A 3D array of shape (N_M, N_M, N_r) containing the predicted
+            xi_hh(r | M_i, M_j).
+        """
+        # 1. Get beta matrix from the emulator.
+        # predict_noextrapolation returns beta on the emulator's native r-bins.
+        r_beta_native, beta_matrix_native = self.predict_noextrapolation(
+            cosmo_params, logM_bins
+        )
+
+        # 2. Interpolate the beta matrix to the desired r grid.
+        from scipy.interpolate import interp1d
+
+        f_interp = interp1d(
+            r_beta_native, beta_matrix_native, axis=-1, fill_value="extrapolate"
+        )
+        beta_matrix = f_interp(r)
+
+        # 3. Get xi_mm(r) for all scales
+        xi_mm = MatterXiEmulator.predict(self, cosmo_params, r)
+
+        # 4. Calculate xi_hh on small scales
+        xi_hh_small_scales = beta_matrix * xi_mm[None, None, :]
+
+        # 5. Get linear biases for large scales
+        biases = np.array(
+            [self.get_linear_bias(cosmo_params, logM) for logM in logM_bins]
+        )
+        b_ij = np.outer(biases, biases)
+
+        # 6. Calculate xi_hh on large scales
+        xi_hh_large_scales = b_ij[:, :, None] * xi_mm[None, None, :]
+
+        # 7. Stitch the results
+        transition_width = self.HP.get("stitching_width", 2.0)
+        weights = 1.0 / (1.0 + np.exp(-(r - self.r_stitch) / transition_width))
+
+        xi_hh_final = (1.0 - weights[None, None, :]) * xi_hh_small_scales + weights[
+            None, None, :
+        ] * xi_hh_large_scales
+
+        return xi_hh_final

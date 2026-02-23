@@ -29,6 +29,9 @@ dependencies = [
     "numpyro",
     "getdist",
     "matplotlib",
+    "scipy",
+    "tinygp",
+    "pytorch-lightning",
 ]
 
 [project.scripts]
