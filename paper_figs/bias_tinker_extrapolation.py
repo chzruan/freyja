@@ -194,23 +194,23 @@ def plot_results(
     ax0.plot(
         logM_bins,
         np.sqrt(np.diag(data_bundle["N100"]["B12_sim"])),
-        label=r"$\mathrm{True}\ (N_{\mathrm{box}}=100)$",
+        label=r"$\mathrm{Data}\ (N_{\mathrm{box}}=100)$",
         color="r",
         lw=0,
         marker=".",
-        markersize=6,
+        markersize=5.5,
         zorder=99,
     )
 
     # 2. N5 Simulation Data (Reliable region)
     ax0.plot(
-        logM_meas,
-        np.sqrt(np.diag(data_bundle["N5"]["B12_sim"]))[mask_reliable],
-        label=r"$\mathrm{True}\ (N_{\mathrm{box}}=5)$",
-        color="purple",
+        logM_bins,
+        np.sqrt(np.diag(data_bundle["N5"]["B12_sim"]))[...],
+        label=r"$\mathrm{Data}\ (N_{\mathrm{box}}=5)$",
+        color="darkviolet",
         lw=0,
         marker="*",
-        markersize=8,
+        markersize=7,
     )
 
     # 3. Tinker Extrapolation (Dashed)
@@ -219,7 +219,7 @@ def plot_results(
         tinker_curve[~mask_extrap],
         label=r"$\mathrm{Tinker\ Extrapolation}$",
         color="k",
-        lw=1.0,
+        lw=1.5,
         linestyle="--",
     )
 
@@ -228,7 +228,7 @@ def plot_results(
         logM_bins[mask_reliable],
         tinker_curve[mask_reliable],
         color="k",
-        lw=1.6,
+        lw=2,
     )
 
     # 5. Fit Limit Line
@@ -246,7 +246,7 @@ def plot_results(
 
     # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.01)
+    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.028)
     print(f"Figure saved to {output_path}")
 
 

@@ -17,4 +17,4 @@ logs/
 __pycache__
 notebooks/
 paper_figs/
-
+mcmc/

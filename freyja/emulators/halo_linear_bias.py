@@ -358,7 +358,7 @@ class HaloLinearBiasEmulator:
         bias_pred = (float(mu_norm) * self.y_std) + self.y_mean
         bias_std = float(jnp.sqrt(var_norm)) * self.y_std
 
-        return bias_pred, bias_std
+        return bias_pred
 
     def predict_noext(self, cosmo_params, logM_bins):
         """

@@ -310,7 +310,18 @@ class MatterXiEmulator:
             k_input=k_Lin, P_input=P_Lin, r_output=r_array, smooth_xi=False
         )
 
-        return xiratio_pred * xi_lin, xiratio_std * xi_lin
+        # return xiratio_pred * xi_lin, xiratio_std * xi_lin
+        return xiratio_pred * xi_lin
+
+    def predict_linear(self, cosmo, r_array):
+        r_array = np.atleast_1d(r_array)
+        xiratio_pred = 1.0  # Force prediction to 1 for linear xi
+
+        k_Lin, P_Lin = self.get_linear_pk_mm(cosmo)
+        xi_lin = compute_xi_from_Pk(
+            k_input=k_Lin, P_input=P_Lin, r_output=r_array, smooth_xi=False
+        )
+        return xiratio_pred * xi_lin
 
     def save(self, path):
         if self.params is None:
