@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Callable, Tuple, Dict
+from pathlib import Path
+from typing import Dict, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -8,7 +9,6 @@ import numpy as np
 from scipy.interpolate import InterpolatedUnivariateSpline
 from tinygp import GaussianProcess, kernels
 from tinygp.helpers import dataclass
-from pathlib import Path
 
 from hmf import MassFunction
 from astropy.cosmology import FlatLambdaCDM
@@ -159,6 +159,14 @@ class HMFEmulator:
     of the Freyja project.
     """
 
+    _GP_MAX_LOG10M = 14.7
+    _SCHECHTER_P0 = (1e-4, 1e14, 1e14, 1.0, 1.0)
+    _SCHECHTER_BOUNDS = (
+        (1e-30, 1e8, 1e8, -20.0, 1e-6),
+        (np.inf, np.inf, np.inf, 20.0, 20.0),
+    )
+    _MIN_SIGMA = 1e-30
+
     def __init__(
         self,
         gp_emulator_path: Path = DEFAULT_CKPT_PATH,
@@ -183,6 +191,19 @@ class HMFEmulator:
         self.Y_train = jnp.array(self.gp_bundle["Y_train"])
         self.gp = build_gp(self.gp_params, self.X_train)
         self.z = z
+        self._analytic_chmf_spline_cache: Dict[
+            Tuple[float, float, float, float], InterpolatedUnivariateSpline
+        ] = {}
+
+    @staticmethod
+    def _normalize_cosmo_params(cosmo_params: np.ndarray) -> np.ndarray:
+        """Return cosmology parameters as a 1D float array [Om0, h, S8, ns]."""
+        arr = np.asarray(cosmo_params, dtype=float).reshape(-1)
+        if arr.size != 4:
+            raise ValueError(
+                "cosmo_params must contain exactly 4 values: [Om0, h, S8, ns]"
+            )
+        return arr
 
     def _build_input(
         self,
@@ -190,11 +211,13 @@ class HMFEmulator:
         log10M_binleftedges: np.ndarray,
     ) -> jnp.ndarray:
         """Construct the 5D input array for the GP [Om0, h, S8, ns, log10M]."""
-        cosmo_params = np.asarray(cosmo_params)
-        log10M_binleftedges = np.asarray(log10M_binleftedges)
-        cosmo_block = np.repeat(cosmo_params[None, :], len(log10M_binleftedges), axis=0)
-        mass_block = log10M_binleftedges.reshape(-1, 1)
-        return jnp.array(np.hstack([cosmo_block, mass_block]))
+        cosmo = self._normalize_cosmo_params(cosmo_params)
+        masses = np.asarray(log10M_binleftedges, dtype=float).reshape(-1)
+
+        X = np.empty((masses.size, 5), dtype=float)
+        X[:, :4] = cosmo
+        X[:, 4] = masses
+        return jnp.asarray(X)
 
     def _predict_ratio(
         self, cosmo_params: np.ndarray, log10M_binleftedges: np.ndarray
@@ -202,40 +225,50 @@ class HMFEmulator:
         """Predict the cHMF ratio and uncertainty from the GP."""
         X_test = self._build_input(cosmo_params, log10M_binleftedges)
         cond = self.gp.condition(self.Y_train, X_test)
-        return np.asarray(cond.gp.mean), np.sqrt(np.asarray(cond.gp.variance))
+        variance = np.asarray(cond.gp.variance)
+        return np.asarray(cond.gp.mean), np.sqrt(np.maximum(variance, 0.0))
 
     def _analytic_cHMF(self, cosmo_params: np.ndarray) -> InterpolatedUnivariateSpline:
         """Compute the Sheth-Tormen cumulative HMF and return a spline interpolator."""
-        Om0, h, S8, ns = cosmo_params
+        cosmo = self._normalize_cosmo_params(cosmo_params)
+        key = tuple(float(x) for x in cosmo)
+        cached = self._analytic_chmf_spline_cache.get(key)
+        if cached is not None:
+            return cached
+
+        Om0, h, S8, ns = cosmo
         sigma8 = S8 / np.sqrt(Om0 / 0.3)
         m_ana, _, cHMF_analytic = halo_mass_function_analytical(
             z=self.z, Om0=Om0, H0=h * 100.0, sigma8=sigma8
         )
-        return InterpolatedUnivariateSpline(
+        spline = InterpolatedUnivariateSpline(
             np.log10(m_ana), np.log10(cHMF_analytic), k=3
         )
+        self._analytic_chmf_spline_cache[key] = spline
+        return spline
 
     def _schechter_fit(
         self,
-        log10M_input,
-        cHMF_input,
-        cHMF_err_input,
-        log10M_extend,
+        log10M_input: np.ndarray,
+        cHMF_input: np.ndarray,
+        cHMF_err_input: np.ndarray,
+        log10M_extend: np.ndarray,
         n_halo_threshold: float = 100.0 / 1024.0**3,
-    ):
+    ) -> np.ndarray:
         """Fit high-mass tail to Schechter form and return extrapolated values."""
         mask_fit = cHMF_input < 2000 * n_halo_threshold
-        p0 = [1e-4, 1e14, 1e14, 1.0, 1.0]
+        sigma = np.maximum(cHMF_err_input[mask_fit], self._MIN_SIGMA)
         popt, _ = curve_fit(
             schechter_log_form,
-            10 ** log10M_input[mask_fit],
+            np.power(10.0, log10M_input[mask_fit]),
             cHMF_input[mask_fit],
-            p0=p0,
-            sigma=cHMF_err_input[mask_fit],
+            p0=self._SCHECHTER_P0,
+            bounds=self._SCHECHTER_BOUNDS,
+            sigma=sigma,
             absolute_sigma=True,
         )
         self.schechter_params = popt
-        return schechter_log_form(10**log10M_extend, *popt)
+        return schechter_log_form(np.power(10.0, log10M_extend), *popt)
 
     def cumulative_hmf(
         self, cosmo_params: np.ndarray, log10M_binleftedges: np.ndarray
@@ -255,8 +288,11 @@ class HMFEmulator:
         cHMF_total : np.ndarray
             Reconstructed cumulative HMF including Schechter extension.
         """
-        log10M_binleftedges = np.asarray(log10M_binleftedges)
-        mask = log10M_binleftedges <= 14.8
+        log10M_binleftedges = np.asarray(log10M_binleftedges, dtype=float)
+        if log10M_binleftedges.size == 0:
+            return np.array([], dtype=float)
+
+        mask = log10M_binleftedges <= self._GP_MAX_LOG10M
 
         ratio_mean, ratio_std = self._predict_ratio(
             cosmo_params, log10M_binleftedges[mask]
@@ -267,16 +303,16 @@ class HMFEmulator:
         cHMF_emu_gp = ratio_mean * cHMF_analytic_gp
         cHMF_err_emu_gp = ratio_std * cHMF_analytic_gp
 
+        cHMF_total = np.empty(log10M_binleftedges.shape, dtype=float)
+        cHMF_total[mask] = cHMF_emu_gp
+
         if np.any(~mask):
-            cHMF_extend = self._schechter_fit(
+            cHMF_total[~mask] = self._schechter_fit(
                 log10M_binleftedges[mask],
                 cHMF_emu_gp,
                 cHMF_err_emu_gp,
                 log10M_binleftedges[~mask],
             )
-            cHMF_total = np.concatenate([cHMF_emu_gp, cHMF_extend])
-        else:
-            cHMF_total = cHMF_emu_gp
 
         return cHMF_total
 
@@ -285,7 +321,7 @@ class HMFEmulator:
         cosmo_params: np.ndarray,
         log10M_bincentres: np.ndarray,
         dlog10M: float = 0.10,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> np.ndarray:
         """
         Compute differential HMF dn/dlog10M via numerical differentiation.
 
@@ -303,9 +339,12 @@ class HMFEmulator:
         dndlog10M : np.ndarray
             Differential mass function.
         """
-        log10M_bincentres = np.asarray(log10M_bincentres)
+        log10M_bincentres = np.asarray(log10M_bincentres, dtype=float)
+        if log10M_bincentres.size == 0:
+            return np.array([], dtype=float)
+
         _lmble = log10M_bincentres - 0.5 * dlog10M
-        _lmble = np.append(_lmble, log10M_bincentres[-1] + 0.5 * dlog10M)
+        _lmble = np.concatenate([_lmble, [log10M_bincentres[-1] + 0.5 * dlog10M]])
 
         cHMF_emu = self.cumulative_hmf(cosmo_params, _lmble)
         return -np.diff(cHMF_emu) / dlog10M
@@ -320,7 +359,7 @@ class HMFEmulator:
         val = self.dndlog10M(cosmo_params, log10M_bincentres, dlog10M)
         return val
 
-    def differential_hmf(
+    def get_dHMF(
         self,
         cosmo_params: np.ndarray,
         log10M_bincentres: np.ndarray,

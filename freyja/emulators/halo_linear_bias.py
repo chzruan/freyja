@@ -1,12 +1,13 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+from pathlib import Path
+from typing import Optional, Tuple
+
+import optax
+from scipy.optimize import curve_fit
 from tinygp import GaussianProcess, kernels
 from tinygp.helpers import dataclass
-from pathlib import Path
-import optax
-from typing import Tuple, Optional, Dict, Any
-from scipy.optimize import curve_fit
 
 # Colossus imports for Tinker fit
 from colossus.cosmology import cosmology as cosmology_colossus
@@ -182,7 +183,7 @@ class HaloLinearBiasEmulator:
         redshift : float
             Redshift for the emulator (used in Tinker fit and peak height calculation).
         """
-        self.hp = hp
+        self.hp = dict(hp)
         self.redshift = redshift
         self.params = None
         self.X_train = None
@@ -194,11 +195,50 @@ class HaloLinearBiasEmulator:
         self.x_std = None
         self.y_mean = None
         self.y_std = None
+        self._gp_predict_cache = None
+
+        logM_min = 12.5
+        logM_max = 13.9
+        self.logM_meas = np.linspace(logM_min, logM_max, 30)
 
         if saved_path is not None:
             # Check if path exists to avoid errors on fresh init
             if Path(saved_path).exists():
                 self.load(saved_path)
+
+    @staticmethod
+    def _normalize_cosmo_params(cosmo_params) -> np.ndarray:
+        """Return cosmology parameters as a 1D float array."""
+        return np.asarray(cosmo_params, dtype=float).reshape(-1)
+
+    def _invalidate_gp_cache(self):
+        """Invalidate cached GP object used for prediction."""
+        self._gp_predict_cache = None
+
+    def _require_loaded_gp(self):
+        """Ensure a trained or loaded GP state is available."""
+        if self.params is None:
+            raise ValueError("GP not trained or loaded.")
+
+    def _get_predict_gp(self) -> GaussianProcess:
+        """Build and cache the prediction GP for repeated inference calls."""
+        self._require_loaded_gp()
+        if self._gp_predict_cache is None:
+            self._gp_predict_cache = build_gp(
+                self.params, self.X_train, self.Y_err_train
+            )
+        return self._gp_predict_cache
+
+    def _build_test_input(self, cosmo_params, logM_bins) -> jnp.ndarray:
+        """Construct normalized batch input with columns [cosmo..., logM]."""
+        cosmo = self._normalize_cosmo_params(cosmo_params)
+        masses = np.asarray(logM_bins, dtype=float).reshape(-1)
+
+        raw_in = np.empty((masses.size, cosmo.size + 1), dtype=float)
+        raw_in[:, :-1] = cosmo
+        raw_in[:, -1] = masses
+        norm_in = (raw_in - self.x_mean) / self.x_std
+        return jnp.asarray(norm_in)
 
     def _calculate_linear_bias(self, imodel, r_mask, mask_M, logM_bins):
         """
@@ -209,8 +249,7 @@ class HaloLinearBiasEmulator:
         try:
             # Load Data
             cosmo = load_cosmology_wrapper(imodel)
-            _, _, xi_hh, xi_sem = load_xihh_data(imodel)
-            r_all, _, _, _ = load_xihh_data(1)
+            r_all, _, xi_hh, xi_sem = load_xihh_data(imodel)
             xi_mm = load_ximm_data(r_all, imodel)
 
             # 1. Extract Diagonals: xi_hh(M, M, r)
@@ -250,15 +289,15 @@ class HaloLinearBiasEmulator:
             bias_var = b_squared_var / (4.0 * b_squared)
 
             # 6. Format for GP
-            inputs, targets, variances = [], [], []
+            cosmo = np.asarray(cosmo, dtype=float).reshape(-1)
+            logM_bins = np.asarray(logM_bins, dtype=float)
+            n_bins = logM_bins.size
 
-            for i in range(len(logM_bins)):
-                # Input: [Cosmo..., logM]
-                inputs.append(np.concatenate([cosmo, [logM_bins[i]]]))
-                targets.append(bias_val[i])
-                variances.append(bias_var[i])
+            inputs = np.empty((n_bins, cosmo.size + 1), dtype=float)
+            inputs[:, :-1] = cosmo
+            inputs[:, -1] = logM_bins
 
-            return inputs, targets, variances
+            return inputs, np.asarray(bias_val), np.asarray(bias_var)
 
         except Exception as e:
             print(f"Skipping Model {imodel} during GP prep: {e}")
@@ -297,6 +336,7 @@ class HaloLinearBiasEmulator:
 
         self.Y_train = jnp.array((Y_raw - self.y_mean) / self.y_std)
         self.Y_err_train = jnp.array(Var_raw / (self.y_std**2))
+        self._invalidate_gp_cache()
 
         print(f"Data Prepared. N_samples: {len(self.Y_train)}")
         print(f"Target Mean: {self.y_mean:.4f}, Std: {self.y_std:.4f}")
@@ -334,6 +374,7 @@ class HaloLinearBiasEmulator:
                 print(f"Step {i:4d} | Loss: {loss_val:.4f}")
 
         self.params = params
+        self._invalidate_gp_cache()
         print(f"Final Loss: {loss_val:.4f}")
         print(f"Optimized Params: {self.params}")
 
@@ -341,22 +382,14 @@ class HaloLinearBiasEmulator:
         """
         Predict Bias for a single mass point.
         """
-        if self.params is None:
-            raise ValueError("GP not trained or loaded.")
-
-        # Prepare Input
-        raw_in = np.concatenate([cosmo_params, [logM]])
-        norm_in = (raw_in - self.x_mean) / self.x_std
-        X_test = jnp.array(norm_in).reshape(1, -1)
-
-        gp = build_gp(self.params, self.X_train, self.Y_err_train)
+        X_test = self._build_test_input(cosmo_params, np.array([logM], dtype=float))
+        gp = self._get_predict_gp()
         cond = gp.condition(self.Y_train, X_test)
 
         mu_norm = cond.gp.mean[0]
-        var_norm = cond.gp.variance[0]
+        var_norm = jnp.maximum(cond.gp.variance[0], 0.0)
 
         bias_pred = (float(mu_norm) * self.y_std) + self.y_mean
-        bias_std = float(jnp.sqrt(var_norm)) * self.y_std
 
         return bias_pred
 
@@ -369,22 +402,16 @@ class HaloLinearBiasEmulator:
         b_pred : np.ndarray
         b_err : np.ndarray
         """
-        if self.params is None:
-            raise ValueError("GP not trained or loaded.")
+        logM_bins = np.asarray(logM_bins, dtype=float)
+        if logM_bins.size == 0:
+            return np.array([], dtype=float), np.array([], dtype=float)
 
-        # Construct batch input
-        n_points = len(logM_bins)
-        cosmo_batch = np.tile(cosmo_params, (n_points, 1))
-        raw_in = np.column_stack([cosmo_batch, logM_bins])
-
-        norm_in = (raw_in - self.x_mean) / self.x_std
-        X_test = jnp.array(norm_in)
-
-        gp = build_gp(self.params, self.X_train, self.Y_err_train)
+        X_test = self._build_test_input(cosmo_params, logM_bins)
+        gp = self._get_predict_gp()
         cond = gp.condition(self.Y_train, X_test)
 
         mu_norm = cond.gp.mean
-        var_norm = cond.gp.variance
+        var_norm = jnp.maximum(cond.gp.variance, 0.0)
 
         bias_pred = (np.array(mu_norm) * self.y_std) + self.y_mean
         bias_std = np.array(jnp.sqrt(var_norm)) * self.y_std
@@ -409,23 +436,17 @@ class HaloLinearBiasEmulator:
         bias_pred : np.ndarray
             Predicted bias at logM_bins using the Tinker fit.
         """
-        # 1. Define 'measured' range (where GP is trusted)
-        # Current fixed values are for the fixed redshift 0.25 training set, can be made dynamic if needed
-        logM_min = 12.5
-        logM_max = 13.9
-        logM_meas = np.linspace(logM_min, logM_max, 30)
+        # Get GP predictions for the measured range
+        b_meas, _ = self.predict_noext(cosmo_params, self.logM_meas)
 
-        # 2. Get GP predictions for the measured range
-        b_meas, _ = self.predict_noext(cosmo_params, logM_meas)
-
-        # 3. Convert to physical mass
-        mass_meas = 10**logM_meas
+        # Convert to physical mass
+        mass_meas = 10**self.logM_meas
         mass_target = 10**logM_bins
 
-        # 4. Fit Tinker parameters and evaluate
+        # Fit Tinker parameters and evaluate
         # Unpack cosmo_params for colossus (expecting first 4 to be Om0, h, S8, ns)
         # Note: Always assume the standard parameter order used in this project.
-        cosmo_tuple = tuple(cosmo_params[:4])
+        cosmo_tuple = tuple(self._normalize_cosmo_params(cosmo_params)[:4])
 
         b_ext, popt = fit_tinker_halo_bias(
             measured_mass=mass_meas,
@@ -459,19 +480,21 @@ class HaloLinearBiasEmulator:
 
     def load(self, path):
         """Loads a saved GP state."""
-        data = np.load(path)
-        self.params = {
-            "log_amp": jnp.array(data["log_amp"]),
-            "log_scale": jnp.array(data["log_scale"]),
-        }
-        self.X_train = jnp.array(data["X_train"])
-        self.Y_train = jnp.array(data["Y_train"])
-        self.Y_err_train = jnp.array(data["Y_err_train"])
+        with np.load(path) as data:
+            self.params = {
+                "log_amp": jnp.array(data["log_amp"]),
+                "log_scale": jnp.array(data["log_scale"]),
+            }
+            self.X_train = jnp.array(data["X_train"])
+            self.Y_train = jnp.array(data["Y_train"])
+            self.Y_err_train = jnp.array(data["Y_err_train"])
 
-        self.x_mean = data["x_mean"]
-        self.x_std = data["x_std"]
-        self.y_mean = data.get("y_mean", 0.0)
-        self.y_std = data.get("y_std", 1.0)
+            self.x_mean = data["x_mean"]
+            self.x_std = data["x_std"]
+            self.y_mean = data.get("y_mean", 0.0)
+            self.y_std = data.get("y_std", 1.0)
+
+        self._invalidate_gp_cache()
 
         print(f"GP Emulator loaded from {path}")
 
