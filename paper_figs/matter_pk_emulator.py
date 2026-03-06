@@ -85,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--frac-err-ylim",
         type=float,
-        default=2.2,
+        default=2.8,
         help="Symmetric y-limit (percent) for fractional error panel.",
     )
     p.add_argument(
@@ -202,9 +202,19 @@ def main() -> None:
             )
 
         # Bottom panel: fractional error.
-        frac_err = (pk_pred / pk_nl) - 1.0
+        frac_err = (pk_nl / pk_pred) - 1.0
         frac_err *= 100.0
-        ax[1].plot(k_nl, frac_err, color=pp[0].get_color(), lw=1.4, alpha=0.95)
+        frac_err_sem = (pk_nl_sem / pk_pred) * 100.0
+        ax[1].errorbar(
+            k_nl,
+            frac_err,
+            yerr=frac_err_sem,
+            color=pp[0].get_color(),
+            lw=0,
+            elinewidth=0.7,
+            marker=".",
+            markersize=5.0,
+        )
 
     ax[0].set_xscale("log")
     ax[1].set_xscale("log")
@@ -221,7 +231,20 @@ def main() -> None:
         linestyle="--",
         lw=0.7,
     )
+    ax[1].axhline(
+        -1.0,
+        color="gray",
+        linestyle="--",
+        lw=0.7,
+    )
+    ax[1].axhline(
+        1.0,
+        color="gray",
+        linestyle="--",
+        lw=0.7,
+    )
     ax[1].set_ylabel(r"$\varepsilon (\%)$", fontsize=20)
+    ax[0].set_ylim([0, 1550])
     ylim = abs(float(args.frac_err_ylim))
     ax[1].set_ylim([-ylim, ylim])
     ax[1].set_xlabel(r"$k / (h \, \mathrm{Mpc}^{-1})$", fontsize=20)

@@ -190,6 +190,18 @@ def load_ximm_data(
     Loads Matter Power Spectrum (P(k)), computes mean P(k),
     and converts to Correlation Function xi_mm using Hankel transform.
     """
+    if imodel == 0:
+        # For the fiducial model, load the average over 100 boxes from DESI_MGx100.
+        if gravity == "LCDM":
+            gravity = "GR"
+        return load_ximm_fiducial_data(
+            r_output=r_output,
+            gravity=gravity,
+            redshift=REDSHIFT,
+            snapnum=snapnum,
+            N_boxes=100,
+        )
+
     pk_collection = []
 
     for ibox in range(1, 6):
