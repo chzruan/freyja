@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 MODULE_DIR = Path(__file__).parent
 
-TEST_IMODELS = [44, 53, 60, 61, 62, 63, 64]
+TEST_IMODELS = [44, 53, 60, 61, 62, 63]
 ALL_IMODELS = list(range(1, 65))
 
 DEFAULT_TARGET_KEY = "m10_transformed"

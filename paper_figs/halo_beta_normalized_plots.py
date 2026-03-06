@@ -29,6 +29,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from cycler import cycler
+from torch.sparse import mm
 
 matplotlib.use("Agg")
 matplotlib.rcParams["text.usetex"] = True
@@ -248,7 +249,9 @@ def plot_fixed_imodel_vary_m2(
 
     ax[0].set_xscale("log")
     ax[1].set_xscale("log")
-    ax[0].set_ylabel(rf"$\beta(r | M_1 = 10^{{{m1:.2f}}}, M_2)$", fontsize=20)
+    ax[0].set_ylabel(
+        r"$\xi_{{\mathrm{{hh}}}}(r | M_1, M_2) / \xi_{{\mathrm{{mm}}}}(r)$", fontsize=20
+    )
     ax[1].set_ylabel(r"$\varepsilon (\%)$", fontsize=20)
     ax[1].set_xlabel(r"$r / (h^{-1}\mathrm{Mpc})$", fontsize=20)
     title = rf"Fixed cosmology (imodel={imodel}), fixed $\log M_1={m1:.2f}$"
@@ -335,7 +338,8 @@ def plot_fixed_masses_vary_cosmology(
 
     ax[1].set_xscale("log")
     ax[0].set_ylabel(
-        rf"$\beta(r | M_1 = 10^{{{m1:.2f}}}, M_2 = 10^{{{m2:.2f}}})$", fontsize=16
+        r"$\xi_{{\mathrm{{hh}}}}(r | M_1, M_2) / \xi_{{\mathrm{{mm}}}}(r)$",
+        fontsize=20,
     )
     ax[1].set_ylabel(r"$\varepsilon (\%)$", fontsize=20)
     ax[1].set_xlabel(r"$r / (h^{-1}\mathrm{Mpc})$", fontsize=20)
