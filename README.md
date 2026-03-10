@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="doc/freyja.jpg" alt="freyja Logo" width="250">
+  <img src="freyja.jpg" alt="freyja Logo" width="250">
 </p>
 
 # Freyja MCMC Analysis Package
