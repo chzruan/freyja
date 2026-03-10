@@ -18,10 +18,18 @@ SNAPNUM = 137
 
 def load_cosmology_wrapper(imodel):
     """
-    Loads cosmology parameters [Om0, h, S8, ns] for a given model ID (1-64) using pyglam.
+    Return cosmological parameters for a cosmology model in DEGRACE-pilot simulations.
 
-    Parameters:
-        imodel (int): Model ID (1-64).
+    Parameters
+    ----------
+    imodel : int
+        Model identifier. Use ``imodel=0`` for the fiducial Planck-2015
+        cosmology; otherwise uses DEGRACE-pilot model indices.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array ``[Om0, h, S8, ns]``.
     """
     if imodel == 0:
         # fiducial Planck-2015 cosmology
@@ -37,13 +45,35 @@ def load_cosmology_wrapper(imodel):
 
 def load_xihh_data(imodel, gravity=GRAVITY, dataflag=DATAFLAG, redshift=REDSHIFT):
     """
-    Loads xi_hh (halo-halo autocorrelation) and r_bins from HDF5.
+    Load halo-halo correlation measurements for a simulation model.
 
-    Returns:
-        r_all (np.ndarray): Radial bins.
-        logM_bins (np.ndarray): Mass bins.
-        xi_hh (np.ndarray): Correlation function, shape (N_M, N_M, N_r).
-        xi_sem (np.ndarray): Standard error of the mean, shape (N_M, N_M, N_r).
+    Parameters
+    ----------
+    imodel : int
+        Model identifier. If ``imodel=0``, data are loaded from the fiducial
+        DESI_MGx100 dataset.
+    gravity : str, optional
+        Gravity model tag used in file naming.
+    dataflag : str, optional
+        Data selection tag used in file naming for non-fiducial models.
+    redshift : float, optional
+        Target redshift for the correlation-function file.
+
+    Returns
+    -------
+    r_all : numpy.ndarray
+        Radial bin centers.
+    logM_bins : numpy.ndarray
+        Log10 halo-mass bin centers.
+    xi_hh : numpy.ndarray
+        Mean halo-halo correlation, shape ``(N_M, N_M, N_r)``.
+    xi_sem : numpy.ndarray
+        Standard error on ``xi_hh`` across boxes, shape ``(N_M, N_M, N_r)``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the requested HDF5 file does not exist.
     """
     if imodel == 0:
         # For the fiducial model, we load from a different file that contains the average over 100 boxes.
@@ -107,8 +137,36 @@ def load_pkmm_data(
     return_mean=True,
 ):
     """
-    Loads Matter Power Spectrum (P(k)) for a given model (imodel = 1..64), computes mean P(k) across boxes, and returns k and P_mean arrays.
-    If return_mean is False, returns list of P(k) arrays for each box instead of the mean.
+    Load matter power spectra for a model and optionally average across boxes.
+
+    Parameters
+    ----------
+    imodel : int, optional
+        Model identifier. If ``imodel=0``, uses the fiducial DESI_MGx100 files.
+    gravity : str, optional
+        Gravity model tag used in file naming.
+    dataflag : str, optional
+        Data selection tag used in file naming for non-fiducial models.
+    snapnum : int, optional
+        Snapshot number used in power-spectrum file names.
+    k_max : float, optional
+        Maximum wavenumber retained from each spectrum.
+    return_mean : bool, optional
+        If ``True``, return the box-averaged spectrum. If ``False``, return all
+        per-box spectra.
+
+    Returns
+    -------
+    k : numpy.ndarray
+        Wavenumber array after applying the ``k < k_max`` mask.
+    P : numpy.ndarray
+        If ``return_mean=True``, shape ``(N_k,)`` with the mean spectrum.
+        Otherwise shape ``(N_box, N_k)`` with per-box spectra.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no power-spectrum files are found.
     """
 
     if imodel == 0:
@@ -164,7 +222,25 @@ def load_linear_pkmm_data(
     k_max=12.0,
 ):
     """
-    Loads Linear Matter Power Spectrum (P(k)) for a given model (imodel = 1..64), calculated from CAMB and used in generating the initial conditions of the simulations.
+    Load the linear matter power spectrum used for initial conditions.
+
+    Parameters
+    ----------
+    imodel : int, optional
+        Model identifier.
+    gravity : str, optional
+        Gravity model tag used in file naming.
+    dataflag : str, optional
+        Data selection tag used in file naming.
+    k_max : float, optional
+        Maximum wavenumber retained.
+
+    Returns
+    -------
+    k : numpy.ndarray
+        Wavenumber array after masking.
+    P : numpy.ndarray
+        Linear matter power spectrum values at ``k``.
     """
 
     file_path = Path(
@@ -187,8 +263,31 @@ def load_ximm_data(
     r_output, imodel=1, gravity=GRAVITY, dataflag=DATAFLAG, snapnum=SNAPNUM
 ):
     """
-    Loads Matter Power Spectrum (P(k)), computes mean P(k),
-    and converts to Correlation Function xi_mm using Hankel transform.
+    Load matter power spectra, average across boxes, and compute ``xi_mm(r)``.
+
+    Parameters
+    ----------
+    r_output : numpy.ndarray
+        Radii at which to evaluate the correlation function.
+    imodel : int, optional
+        Model identifier. If ``imodel=0``, delegates to
+        :func:`load_ximm_fiducial_data`.
+    gravity : str, optional
+        Gravity model tag used in file naming.
+    dataflag : str, optional
+        Data selection tag used in file naming for non-fiducial models.
+    snapnum : int, optional
+        Snapshot number used in power-spectrum file names.
+
+    Returns
+    -------
+    numpy.ndarray
+        Matter correlation function ``xi_mm`` evaluated at ``r_output``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no power-spectrum files are found.
     """
     if imodel == 0:
         # For the fiducial model, load the average over 100 boxes from DESI_MGx100.
@@ -241,13 +340,33 @@ def load_ximm_data(
 
 def load_xihh_fiducial_data(gravity="GR", redshift=0.25, N_boxes=int(100)):
     """
-    Loads xi_hh (halo-halo autocorrelation) and r_bins for the fiducial Planck cosmology.
+    Load fiducial halo-halo correlation measurements from DESI_MGx100.
 
-    Returns:
-        r_all (np.ndarray): Radial bins.
-        logM_bins (np.ndarray): Mass bins.
-        xi_hh (np.ndarray): Correlation function, shape (N_M, N_M, N_r).
-        xi_sem (np.ndarray): Standard error of the mean, shape (N_M, N_M, N_r).
+    Parameters
+    ----------
+    gravity : str, optional
+        Gravity model subdirectory/tag. For fiducial LCDM, this is usually
+        ``"GR"``.
+    redshift : float, optional
+        Target redshift used in the xi_hh filename.
+    N_boxes : int, optional
+        Number of simulation boxes to include in the average.
+
+    Returns
+    -------
+    r_bins : numpy.ndarray
+        Radial bin centers.
+    logM_bins : numpy.ndarray
+        Log10 halo-mass bin centers.
+    xi_hh_mean : numpy.ndarray
+        Mean halo-halo correlation, shape ``(N_M, N_M, N_r)``.
+    xi_hh_sem : numpy.ndarray
+        Standard error on ``xi_hh_mean`` across boxes, shape ``(N_M, N_M, N_r)``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the requested HDF5 file does not exist.
     """
     file_path = Path(
         f"/cosma8/data/dp203/dc-ruan1/DESI_MGx100/data/xiR_hh-diffM_{gravity}_z{redshift:.2f}.hdf5"
@@ -281,15 +400,35 @@ def load_pkmm_fiducial_data(
     k_max=12.0,
 ):
     """
-    Loads Matter Power Spectrum (P(k))
-    if return_mean is True, computes mean P(k), else returns list of P(k) arrays.
+    Load fiducial matter power spectra from DESI_MGx100.
 
-    returns (return_mean=True):
-        k (np.ndarray): Wavenumber array.
-        P_mean (np.ndarray): Mean power spectrum.
-    returns (return_mean=False):
-        k (np.ndarray): Wavenumber array.
-        pk_collection (list of np.ndarray): List of P(k) arrays for each box.
+    Parameters
+    ----------
+    gravity : str, optional
+        Gravity model subdirectory/tag.
+    redshift : float, optional
+        Redshift label retained for API consistency.
+    snapnum : int, optional
+        Snapshot number used in power-spectrum file names.
+    N_boxes : int, optional
+        Number of simulation boxes to include.
+    return_mean : bool, optional
+        If ``True``, return the mean over boxes. If ``False``, return per-box
+        spectra.
+    k_max : float, optional
+        Maximum wavenumber retained from each spectrum.
+
+    Returns
+    -------
+    k : numpy.ndarray
+        Wavenumber array after applying the ``k < k_max`` mask.
+    P : numpy.ndarray or list[numpy.ndarray]
+        Mean spectrum if ``return_mean=True``; otherwise list of per-box spectra.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no power-spectrum files are found.
     """
     pk_collection = []
     for ibox in range(1, N_boxes + 1):
@@ -328,8 +467,30 @@ def load_ximm_fiducial_data(
     r_output, gravity="GR", redshift=0.25, snapnum=137, N_boxes=int(100)
 ):
     """
-    Loads Matter Power Spectrum (P(k)), computes mean P(k),
-    and converts to Correlation Function xi_mm using Hankel transform.
+    Compute fiducial matter correlation ``xi_mm(r)`` from DESI_MGx100 spectra.
+
+    Parameters
+    ----------
+    r_output : numpy.ndarray
+        Radii at which to evaluate the correlation function.
+    gravity : str, optional
+        Gravity model subdirectory/tag.
+    redshift : float, optional
+        Redshift label retained for API consistency.
+    snapnum : int, optional
+        Snapshot number used in power-spectrum file names.
+    N_boxes : int, optional
+        Number of simulation boxes to include in the mean power spectrum.
+
+    Returns
+    -------
+    numpy.ndarray
+        Matter correlation function ``xi_mm`` evaluated at ``r_output``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no power-spectrum files are found.
     """
     pk_collection = []
     for ibox in range(1, N_boxes + 1):
