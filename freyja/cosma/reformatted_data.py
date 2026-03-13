@@ -24,6 +24,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+from pyglam.durmun.dataload import CosmologyDurMun
 
 DEFAULT_GRAVITY = "LCDM"
 DEFAULT_DATAFLAG = "wide_sample_first_64"
@@ -113,6 +114,23 @@ def _read_model_group(
     return attrs, data
 
 
+def _cosmology_vector_from_run(
+    imodel: int,
+    gravity: str,
+    dataflag: str,
+) -> np.ndarray:
+    """Return the source-of-truth cosmology vector for one DurMun model."""
+    cosmo = CosmologyDurMun.from_run(
+        imodel=imodel,
+        gravity=gravity,
+        dataflag=dataflag,
+    )
+    values = [cosmo.Om0, cosmo.h, cosmo.S8, cosmo.ns]
+    if gravity != "LCDM" and hasattr(cosmo, "log10fR0abs"):
+        values.append(cosmo.log10fR0abs)
+    return np.asarray(values, dtype=float)
+
+
 def load_reformatted_cosmology(
     imodel: int,
     gravity: str = DEFAULT_GRAVITY,
@@ -120,7 +138,7 @@ def load_reformatted_cosmology(
     redshift: float = DEFAULT_REDSHIFT,
     data_dir: Path | str = DEFAULT_DATA_DIR,
 ) -> np.ndarray:
-    """Load the reformatted cosmology vector ``[Om0, h, S8, ns]`` for one model.
+    """Load the cosmology vector for one model.
 
     Parameters
     ----------
@@ -133,8 +151,17 @@ def load_reformatted_cosmology(
     Returns
     -------
     np.ndarray
-        One-dimensional array containing ``[Om0, h, S8, ns]``.
+        One-dimensional array containing ``[Om0, h, S8, ns]`` for ``LCDM`` and
+        ``[Om0, h, S8, ns, log10fR0abs]`` for modified-gravity runs such as
+        ``fRn1``.
     """
+    if imodel != 0:
+        return _cosmology_vector_from_run(
+            imodel=imodel,
+            gravity=gravity,
+            dataflag=dataflag,
+        )
+
     path = get_reformatted_data_path(
         "cosmo", gravity=gravity, dataflag=dataflag, redshift=redshift, data_dir=data_dir
     )

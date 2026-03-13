@@ -1,7 +1,11 @@
 import h5py
 import numpy as np
 from pathlib import Path
-from .xi_hh import load_cosmology_wrapper
+from .xi_hh import (
+    LEGACY_DM64_DATA_DIR,
+    _durmun_model_dir,
+    load_cosmology_wrapper,
+)
 
 from freyja.emulators import HaloLinearBiasEmulator, MatterXiEmulator
 
@@ -128,6 +132,55 @@ SNAPNUM = 137
 MOMENT_FIELDS = ("m10", "c20", "c02", "c30", "c12", "c40", "c22", "c04")
 
 
+def _legacy_velocity_moment_path(imodel, gravity=GRAVITY, redshift=REDSHIFT):
+    """Return the legacy COSMA velocity-moment HDF5 path for one model."""
+    return (
+        LEGACY_DM64_DATA_DIR
+        / "velmom"
+        / f"vm_hh-diffM_first64_{gravity}_model{imodel}_z{redshift:.2f}.hdf5"
+    )
+
+
+def _slice_velocity_moment_dict(data, logM_cut):
+    """Apply the same mass-bin cut to reformatted velocity-moment grids."""
+    logM_bins_all = np.asarray(data["logM_bins"], dtype=float)
+    if logM_cut is None:
+        mask = np.ones(logM_bins_all.shape, dtype=bool)
+    else:
+        mask = logM_bins_all <= float(logM_cut)
+    logM_bins = logM_bins_all[mask]
+    if logM_bins.size == 0:
+        raise ValueError(f"No halo mass bins satisfy logM <= {logM_cut}.")
+
+    sliced = {
+        "r_vm": np.asarray(data["r"], dtype=float),
+        "logM_bins": logM_bins,
+    }
+    for field in MOMENT_FIELDS:
+        arr = np.asarray(data[field], dtype=float)
+        err = np.asarray(data[f"{field}_err"], dtype=float)
+        sliced[field] = arr[mask][:, mask, :]
+        sliced[f"{field}_err"] = err[mask][:, mask, :]
+    return sliced
+
+
+def _load_reformatted_velocity_moments_if_available(
+    imodel, gravity=GRAVITY, redshift=REDSHIFT, logM_cut=14.0
+):
+    """Return reformatted velocity moments when a local split export is available."""
+    try:
+        from .reformatted_data import load_reformatted_velocity_moments
+
+        data = load_reformatted_velocity_moments(
+            imodel=imodel,
+            gravity=gravity,
+            redshift=redshift,
+        )
+    except (FileNotFoundError, KeyError):
+        return None
+    return _slice_velocity_moment_dict(data, logM_cut=logM_cut)
+
+
 def load_velocity_moment_hh(imodel, gravity=GRAVITY, redshift=REDSHIFT, logM_cut=14.0):
     """Load the halo-halo velocity moment data for a given cosmological model and redshift.
 
@@ -155,14 +208,32 @@ def load_velocity_moment_hh(imodel, gravity=GRAVITY, redshift=REDSHIFT, logM_cut
     cosmo_params = load_cosmology_wrapper(imodel)
 
     # Construct the file path based on the provided parameters
-    base_path = Path(
-        "/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/data/velmom/"
+    file_path = _legacy_velocity_moment_path(
+        imodel=imodel,
+        gravity=gravity,
+        redshift=redshift,
     )
-    file_name = f"vm_hh-diffM_first64_{gravity}_model{imodel}_z{redshift:.2f}.hdf5"
-    file_path = base_path / file_name
-
     if not file_path.exists():
-        raise FileNotFoundError(f"Data file not found: {file_path}")
+        reformatted = _load_reformatted_velocity_moments_if_available(
+            imodel=imodel,
+            gravity=gravity,
+            redshift=redshift,
+            logM_cut=logM_cut,
+        )
+        if reformatted is not None:
+            reformatted["cosmo_params"] = cosmo_params
+            reformatted["redshift"] = redshift
+            reformatted["logM_cut"] = logM_cut
+            return reformatted
+
+        simulation_dir = _durmun_model_dir(imodel, gravity=gravity)
+        raise FileNotFoundError(
+            "Halo velocity-moment data not found for "
+            f"gravity='{gravity}', model{imodel}. "
+            f"Tried legacy processed file {file_path}. "
+            "No local reformatted velocity-moment export was found either. "
+            f"Raw simulation directory: {simulation_dir}"
+        )
 
     def _mass_from_group(name, prefix):
         if not name.startswith(prefix + "_"):

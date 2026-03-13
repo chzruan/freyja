@@ -5,4 +5,5 @@ from .xi_R_hh_diffM import (
     HaloXiDiffMCalculator,
 )  # scale-dependent halo bias beta(r | M1, M2) = xi_hh(r | M1, M2) / xi_mm(r)
 from .pk_mm import MatterAlphaEmulator
+from .pk_mm_ratio_mg import MatterPkMGRatioEmulator
 from .xi_mm import MatterXiEmulator

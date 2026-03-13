@@ -14,6 +14,85 @@ GRAVITY = "LCDM"
 DATAFLAG = "wide_sample_first_64"
 REDSHIFT = 0.25
 SNAPNUM = 137
+LEGACY_DM64_DATA_DIR = Path("/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/data/")
+MG_GLAM_ROOT = Path("/cosma8/data/dp203/dc-ruan1/mg_glam/")
+
+
+def _durmun_model_dir(imodel, gravity=GRAVITY, dataflag=DATAFLAG):
+    """Return the raw mg_glam directory for one non-fiducial DurMun simulation."""
+    return (
+        MG_GLAM_ROOT
+        / f"DurMun_hmfemu_{gravity}_{dataflag}_model{imodel}_L1024Np2048Ng4096"
+    )
+
+
+def _legacy_xihh_path(imodel, gravity=GRAVITY, dataflag=DATAFLAG, redshift=REDSHIFT):
+    """Return the legacy COSMA xi_hh HDF5 path for one non-fiducial model."""
+    return (
+        LEGACY_DM64_DATA_DIR
+        / f"xiR_hh-diffM_{gravity}_{dataflag}_z{redshift:.2f}_model{imodel}.hdf5"
+    )
+
+
+def _load_xihh_legacy_file(file_path):
+    """Read a legacy xi_hh HDF5 file and return the standard tuple output."""
+    with h5py.File(file_path, "r") as f:
+        # Extract Mass Bins
+        logM1_keys = sorted([k for k in f.keys() if k.startswith("logM1_")])
+        logM_bins = np.array([float(k.split("_")[1]) for k in logM1_keys])
+
+        # Extract Radial Bins (from the first entry)
+        first_key = logM1_keys[0]
+        first_sub_key = sorted(f[first_key].keys())[0]
+        r_all = f[first_key][first_sub_key]["box1"]["r_bincentres"][:]
+
+        # Initialize Arrays
+        N_M = len(logM_bins)
+        N_r = len(r_all)
+        xi_hh = np.zeros((N_M, N_M, N_r))
+        xi_sem = np.zeros((N_M, N_M, N_r))
+
+        # Fill Data
+        for i, k1 in enumerate(logM1_keys):
+            k2_keys = sorted([k for k in f[k1].keys() if k.startswith("logM2_")])
+            for j, k2 in enumerate(k2_keys):
+                box_data = []
+                for b in range(1, 6):
+                    key = f"box{b}"
+                    if key in f[k1][k2]:
+                        box_data.append(f[k1][k2][key]["xi"][:])
+
+                if box_data:
+                    # Calculate Mean and SEM across boxes
+                    mean_xi = np.mean(box_data, axis=0)
+                    xi_hh[i, j, :] = mean_xi
+                    xi_hh[j, i, :] = mean_xi  # Enforce symmetry
+
+                    sem = np.std(box_data, axis=0) / np.sqrt(len(box_data))
+                    xi_sem[i, j, :] = sem
+                    xi_sem[j, i, :] = sem
+                else:
+                    xi_hh[i, j, :] = np.nan
+                    xi_sem[i, j, :] = np.nan
+
+    return r_all, logM_bins, xi_hh, xi_sem
+
+
+def _load_reformatted_xihh_if_available(
+    imodel, gravity=GRAVITY, dataflag=DATAFLAG, redshift=REDSHIFT
+):
+    """Return reformatted xi_hh data when a local split export is available."""
+    try:
+        from .reformatted_data import load_reformatted_xihh
+
+        return load_reformatted_xihh(
+            imodel=imodel,
+            gravity=gravity,
+            dataflag=dataflag,
+            redshift=redshift,
+        )
+    except (FileNotFoundError, KeyError):
+        return None
 
 
 def load_cosmology_wrapper(imodel):
@@ -78,54 +157,32 @@ def load_xihh_data(imodel, gravity=GRAVITY, dataflag=DATAFLAG, redshift=REDSHIFT
     if imodel == 0:
         # For the fiducial model, we load from a different file that contains the average over 100 boxes.
         return load_xihh_fiducial_data(gravity=gravity, redshift=redshift, N_boxes=100)
-    file_path = (
-        Path("/cosma8/data/dp203/dc-ruan1/proj_emulator_RSD/work1/DMx64/data/")
-        / f"xiR_hh-diffM_{gravity}_{dataflag}_z{redshift:.2f}_model{imodel}.hdf5"
+    file_path = _legacy_xihh_path(
+        imodel=imodel,
+        gravity=gravity,
+        dataflag=dataflag,
+        redshift=redshift,
     )
+    if file_path.exists():
+        return _load_xihh_legacy_file(file_path)
 
-    if not file_path.exists():
-        raise FileNotFoundError(f"Data file not found: {file_path}")
+    reformatted = _load_reformatted_xihh_if_available(
+        imodel=imodel,
+        gravity=gravity,
+        dataflag=dataflag,
+        redshift=redshift,
+    )
+    if reformatted is not None:
+        return reformatted
 
-    with h5py.File(file_path, "r") as f:
-        # Extract Mass Bins
-        logM1_keys = sorted([k for k in f.keys() if k.startswith("logM1_")])
-        logM_bins = np.array([float(k.split("_")[1]) for k in logM1_keys])
-
-        # Extract Radial Bins (from the first entry)
-        first_key = logM1_keys[0]
-        first_sub_key = sorted(f[first_key].keys())[0]
-        r_all = f[first_key][first_sub_key]["box1"]["r_bincentres"][:]
-
-        # Initialize Arrays
-        N_M = len(logM_bins)
-        N_r = len(r_all)
-        xi_hh = np.zeros((N_M, N_M, N_r))
-        xi_sem = np.zeros((N_M, N_M, N_r))
-
-        # Fill Data
-        for i, k1 in enumerate(logM1_keys):
-            k2_keys = sorted([k for k in f[k1].keys() if k.startswith("logM2_")])
-            for j, k2 in enumerate(k2_keys):
-                box_data = []
-                for b in range(1, 6):
-                    key = f"box{b}"
-                    if key in f[k1][k2]:
-                        box_data.append(f[k1][k2][key]["xi"][:])
-
-                if box_data:
-                    # Calculate Mean and SEM across boxes
-                    mean_xi = np.mean(box_data, axis=0)
-                    xi_hh[i, j, :] = mean_xi
-                    xi_hh[j, i, :] = mean_xi  # Enforce symmetry
-
-                    sem = np.std(box_data, axis=0) / np.sqrt(len(box_data))
-                    xi_sem[i, j, :] = sem
-                    xi_sem[j, i, :] = sem
-                else:
-                    xi_hh[i, j, :] = np.nan
-                    xi_sem[i, j, :] = np.nan
-
-    return r_all, logM_bins, xi_hh, xi_sem
+    simulation_dir = _durmun_model_dir(imodel, gravity=gravity, dataflag=dataflag)
+    raise FileNotFoundError(
+        "Halo-halo correlation data not found for "
+        f"gravity='{gravity}', model{imodel}. "
+        f"Tried legacy processed file {file_path}. "
+        "No local reformatted xi_hh export was found either. "
+        f"Raw simulation directory: {simulation_dir}"
+    )
 
 
 def load_pkmm_data(
@@ -185,8 +242,7 @@ def load_pkmm_data(
     pk_collection = []
     for ibox in range(1, 6):
         file_path = (
-            Path("/cosma8/data/dp203/dc-ruan1/mg_glam/")
-            / f"DurMun_hmfemu_{gravity}_{dataflag}_model{imodel}_L1024Np2048Ng4096"
+            _durmun_model_dir(imodel=imodel, gravity=gravity, dataflag=dataflag)
             / f"Run{ibox}"
             / f"PowerDM.log.{str(snapnum).zfill(4)}.{str(ibox).zfill(4)}.dat"
         )
@@ -243,8 +299,8 @@ def load_linear_pkmm_data(
         Linear matter power spectrum values at ``k``.
     """
 
-    file_path = Path(
-        f"/cosma8/data/dp203/dc-ruan1/mg_glam/DurMun_hmfemu_{gravity}_{dataflag}_model{imodel}_L1024Np2048Ng4096/PkTable.dat"
+    file_path = (
+        _durmun_model_dir(imodel=imodel, gravity=gravity, dataflag=dataflag) / "PkTable.dat"
     )  # This file contains the linear P(k) used for initial conditions, calculated at z_init=100 and linearly extrapolated to redshift zero.
     k, P = np.loadtxt(
         file_path,
@@ -305,8 +361,7 @@ def load_ximm_data(
 
     for ibox in range(1, 6):
         file_path = (
-            Path("/cosma8/data/dp203/dc-ruan1/mg_glam/")
-            / f"DurMun_hmfemu_{gravity}_{dataflag}_model{imodel}_L1024Np2048Ng4096"
+            _durmun_model_dir(imodel=imodel, gravity=gravity, dataflag=dataflag)
             / f"Run{ibox}"
             / f"PowerDM.log.{str(snapnum).zfill(4)}.{str(ibox).zfill(4)}.dat"
         )

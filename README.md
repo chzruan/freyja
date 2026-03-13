@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="freyja.jpg" alt="freyja Logo" width="250">
+</p>
+
 # Freyja
 
 `freyja` provides pretrained cosmology emulators for halo statistics and related correlation functions. The repository currently ships checkpoint files for the halo mass function, linear halo bias, scale-dependent halo bias, and matter correlation function emulators at `z = 0.25`.
