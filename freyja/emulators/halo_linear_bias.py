@@ -13,7 +13,8 @@ from tinygp.helpers import dataclass
 from colossus.cosmology import cosmology as cosmology_colossus
 from colossus.lss import peaks
 
-from ..cosma.xi_hh import load_cosmology_wrapper, load_xihh_data, load_ximm_data
+from ..cosma.xi_hh import load_cosmology_wrapper, load_xihh_data
+from ..cosma.xi_mm import load_ximm_data
 
 MODULE_DIR = Path(__file__).parent
 

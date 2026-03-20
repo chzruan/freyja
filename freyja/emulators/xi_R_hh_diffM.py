@@ -11,7 +11,8 @@ from pytorch_lightning.callbacks import (
 )
 
 # Local imports
-from ..cosma.xi_hh import load_cosmology_wrapper, load_xihh_data, load_ximm_data
+from ..cosma.xi_hh import load_cosmology_wrapper, load_xihh_data
+from ..cosma.xi_mm import load_ximm_data
 from .xi_R_hh_diffM_dataset import HaloBetaDataset
 from .xi_R_hh_diffM_network import BetaNet
 from .xi_R_hh_diffM_network import HP as HyperParamsDefault

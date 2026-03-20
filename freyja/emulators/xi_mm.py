@@ -10,7 +10,8 @@ import optax
 from typing import Tuple, Optional, Dict, Any
 from scipy.interpolate import InterpolatedUnivariateSpline
 
-from ..cosma.xi_hh import load_cosmology_wrapper, load_ximm_data
+from ..cosma.xi_hh import load_cosmology_wrapper
+from ..cosma.xi_mm import load_ximm_data
 from ..utils.pk_to_xi import compute_xi_from_Pk
 
 MODULE_DIR = Path(__file__).parent

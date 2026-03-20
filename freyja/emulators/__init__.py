@@ -1,4 +1,5 @@
 from .halo_mass_function import HMFEmulator
+from .halo_mass_function_ratio_mg import HaloMassFunctionMGRatioEmulator
 from .halo_linear_bias import HaloLinearBiasEmulator
 from .xi_R_hh_diffM import (
     HaloBetaEmulator,
